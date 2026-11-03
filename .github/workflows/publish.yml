@@ -360,7 +360,7 @@ jobs:
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Download the cdk.out from the installer artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: installer
           path: /tmp/installer-artifacts

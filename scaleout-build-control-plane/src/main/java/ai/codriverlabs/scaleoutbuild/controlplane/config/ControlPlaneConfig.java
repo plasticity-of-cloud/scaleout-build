@@ -128,6 +128,21 @@ public interface ControlPlaneConfig {
 
     MicroVm microVm();
 
+    ClassicLambda classicLambda();
+
+    /** Configuration for the standard asynchronous Lambda worker backend. */
+    interface ClassicLambda {
+        /** Explicit opt-in, retaining Fargate as the unchanged auto-routing default. */
+        @WithDefault("false")
+        boolean enabled();
+
+        /** Deployed image function for x86_64 build cells. */
+        Optional<String> x86_64FunctionArn();
+
+        /** Deployed image function for arm64 build cells. */
+        Optional<String> arm64FunctionArn();
+    }
+
     /**
      * Lambda MicroVM backend configuration.
      *

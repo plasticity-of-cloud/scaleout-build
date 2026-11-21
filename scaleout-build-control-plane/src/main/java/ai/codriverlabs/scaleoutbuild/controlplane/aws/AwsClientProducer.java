@@ -14,6 +14,7 @@ import software.amazon.awssdk.regions.providers.DefaultAwsRegionProviderChain;
 import software.amazon.awssdk.services.cloudwatchlogs.CloudWatchLogsClient;
 import software.amazon.awssdk.services.ecs.EcsClient;
 import software.amazon.awssdk.services.lambdamicrovms.LambdaMicrovmsClient;
+import software.amazon.awssdk.services.lambda.LambdaClient;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 
@@ -86,6 +87,15 @@ public class AwsClientProducer {
 
     @Produces
     @ApplicationScoped
+    public LambdaClient lambdaClient() {
+        return LambdaClient.builder()
+                .region(region())
+                .httpClientBuilder(UrlConnectionHttpClient.builder())
+                .build();
+    }
+
+    @Produces
+    @ApplicationScoped
     public MicroVmImageManager microVmImageManager(LambdaMicrovmsClient microvmsClient) {
         return new MicroVmImageManager(microvmsClient);
     }
@@ -110,6 +120,10 @@ public class AwsClientProducer {
     }
 
     void closeEcs(@Disposes EcsClient client) {
+        client.close();
+    }
+
+    void closeLambda(@Disposes LambdaClient client) {
         client.close();
     }
 

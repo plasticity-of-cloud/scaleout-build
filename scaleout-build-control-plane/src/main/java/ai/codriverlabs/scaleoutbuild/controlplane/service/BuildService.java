@@ -24,6 +24,8 @@ import ai.codriverlabs.scaleoutbuild.controlplane.store.BuildRecord;
 import ai.codriverlabs.scaleoutbuild.controlplane.store.BuildRepository;
 import ai.codriverlabs.scaleoutbuild.ecs.AgentContainerSettings;
 import ai.codriverlabs.scaleoutbuild.ecs.AgentEnvironment;
+import ai.codriverlabs.scaleoutbuild.ecs.ClassicLambdaCellLauncher;
+import ai.codriverlabs.scaleoutbuild.ecs.ClassicLambdaSettings;
 import ai.codriverlabs.scaleoutbuild.ecs.CellHandle;
 import ai.codriverlabs.scaleoutbuild.ecs.CellLaunchException;
 import ai.codriverlabs.scaleoutbuild.ecs.CellLaunchRequest;
@@ -48,6 +50,7 @@ import java.util.Optional;
 import org.jboss.logging.Logger;
 import software.amazon.awssdk.services.ecs.EcsClient;
 import software.amazon.awssdk.services.lambdamicrovms.LambdaMicrovmsClient;
+import software.amazon.awssdk.services.lambda.LambdaClient;
 import software.amazon.awssdk.services.s3.S3Client;
 
 /** Build lifecycle: create, start, observe, cancel. Every method is ownership-scoped. */
@@ -59,6 +62,8 @@ public class BuildService {
      * entrypoint wrapper. {@code AgentMain} never exits with it, so it is unambiguous.
      */
     private static final int CONTAINER_TIMEOUT_EXIT_CODE = 124;
+    /** Standard Lambda is limited to 900s; async delivery is capped to 60s by CDK. */
+    private static final Duration CLASSIC_LAMBDA_STATUS_DEADLINE = Duration.ofMinutes(16);
 
     private static final Logger LOG = Logger.getLogger(BuildService.class);
 
@@ -92,18 +97,20 @@ public class BuildService {
     private final ControlPlaneConfig config;
     private final EcsClient ecs;
     private final LambdaMicrovmsClient microvms;
+    private final LambdaClient lambda;
     private final S3Client s3Client;
 
     @Inject
     public BuildService(BuildRepository repository, StagingService staging, ResourcePolicy policy,
                         ControlPlaneConfig config, EcsClient ecs, LambdaMicrovmsClient microvms,
-                        S3Client s3Client) {
+                        LambdaClient lambda, S3Client s3Client) {
         this.repository = repository;
         this.staging = staging;
         this.policy = policy;
         this.config = config;
         this.ecs = ecs;
         this.microvms = microvms;
+        this.lambda = lambda;
         this.s3Client = s3Client;
     }
 
@@ -245,6 +252,14 @@ public class BuildService {
             BuildKind buildKind = BuildKind.parse(cell.getCell().split("/")[0]);
             Architecture architecture = Architecture.parse(cell.getCell().split("/")[1]);
             try {
+                CellLauncher launcher = cellLauncher(architecture,
+                        record.getBuildSpec().backendPreference());
+                int cellTimeout = policy.resolveCellTimeoutMinutes(record.getBuildSpec().timeoutMinutes());
+                // Leave one minute for artifact/status publication before Lambda's fixed 900-second
+                // deadline. Fargate and MicroVM preserve their independently configured budgets.
+                if (launcher instanceof ClassicLambdaCellLauncher) {
+                    cellTimeout = Math.min(cellTimeout, 14);
+                }
                 staging.materializeCell(record.getOwnerKey(), record.getBuildId(), buildKind,
                         architecture, record.getInputs());
                 String stagingRelativePath = staging.stagingPath(record.getOwnerKey(),
@@ -274,8 +289,7 @@ public class BuildService {
                         // implemented -- and clamps what a client may ask for, the way every other
                         // requested dimension already was. Without the clamp the container backstop
                         // inherits an arbitrary client value and the only ceiling left is the reaper.
-                        .timeoutMinutes(policy.resolveCellTimeoutMinutes(
-                                record.getBuildSpec().timeoutMinutes()))
+                        .timeoutMinutes(cellTimeout)
                         .build().stream()
                         .collect(java.util.stream.Collectors.toMap(
                                 software.amazon.awssdk.services.ecs.model.KeyValuePair::name,
@@ -285,8 +299,7 @@ public class BuildService {
                 CellLaunchRequest request = new CellLaunchRequest(clusterSettings, containerSettings,
                         record.getBuildId(), buildKind, architecture, stagingRelativePath,
                         agentEnvironment);
-                CellHandle handle = cellLauncher(architecture, record.getBuildSpec().backendPreference())
-                        .launch(request);
+                CellHandle handle = launcher.launch(request);
                 applyHandle(cell, handle);
                 cell.setState(CellState.PROVISIONING);
             } catch (Exception e) {
@@ -339,6 +352,9 @@ public class BuildService {
             return new MicroVmCellLauncher(microvms, s3Client, microVmSettingsFromConfig(),
                     config.stagingBucket());
         }
+        if ("lambda".equals(preference)) {
+            return classicLambdaLauncher();
+        }
         // auto: unchanged from before backendPreference existed.
         if (architecture == Architecture.ARM64) {
             var microVm = config.microVm();
@@ -364,6 +380,16 @@ public class BuildService {
                 microVm.vpcEgressConnectorArn().orElse(null), config.ecs().logGroupName());
     }
 
+    /** Standard Lambda workers are architecture-specific deployed functions and always use
+     * direct S3 I/O. This constructor is shared by launch, poll and cooperative cancellation. */
+    private ClassicLambdaCellLauncher classicLambdaLauncher() {
+        var classic = config.classicLambda();
+        return new ClassicLambdaCellLauncher(lambda, s3Client,
+                new ClassicLambdaSettings(classic.x86_64FunctionArn().orElse("unused"),
+                        classic.arm64FunctionArn().orElse("unused")),
+                config.stagingBucket());
+    }
+
     /** Applies a freshly launched cell's handle to its persisted record — the one place this
      * module's {@code CellHandle} vocabulary is translated into {@code BuildRecord.CellRecord}'s
      * stored fields. */
@@ -375,6 +401,10 @@ public class BuildService {
             cell.setBackend("MICROVM");
             cell.setMicrovmId(h.microvmId());
             cell.setMicrovmEndpoint(h.endpoint());
+        } else if (handle instanceof CellHandle.ClassicLambdaHandle h) {
+            cell.setBackend("LAMBDA");
+            cell.setLambdaFunctionArn(h.functionArn());
+            cell.setLambdaRequestId(h.requestId());
         }
     }
 
@@ -420,8 +450,14 @@ public class BuildService {
                 continue;
             }
             CellHandle handle = cellHandleOf(cell).get();
+            if (handle instanceof CellHandle.ClassicLambdaHandle h) {
+                handle = new CellHandle.ClassicLambdaHandle(h.functionArn(), h.requestId(),
+                        stagingPathFor(record, cell));
+            }
             CellLauncher launcher = handle instanceof CellHandle.MicroVmHandle
-                    ? microVmLauncherFor(record) : fargateLauncher;
+                    ? microVmLauncherFor(record)
+                    : handle instanceof CellHandle.ClassicLambdaHandle
+                            ? classicLambdaLauncher() : fargateLauncher;
             try {
                 launcher.stop(handle, reason);
             } catch (RuntimeException e) {
@@ -450,6 +486,11 @@ public class BuildService {
             return cell.getMicrovmId() == null ? Optional.empty()
                     : Optional.of(new CellHandle.MicroVmHandle(cell.getMicrovmId(),
                             cell.getMicrovmEndpoint(), null));
+        }
+        if ("LAMBDA".equals(cell.getBackend())) {
+            return cell.getLambdaFunctionArn() == null ? Optional.empty()
+                    : Optional.of(new CellHandle.ClassicLambdaHandle(cell.getLambdaFunctionArn(),
+                            cell.getLambdaRequestId(), null));
         }
         return cell.getTaskArn() == null ? Optional.empty()
                 : Optional.of(new CellHandle.FargateHandle(cell.getTaskArn()));
@@ -514,6 +555,7 @@ public class BuildService {
     public BuildRecord refreshCellStates(BuildRecord record) {
         List<BuildRecord.CellRecord> fargateCells = new ArrayList<>();
         List<BuildRecord.CellRecord> microVmCells = new ArrayList<>();
+        List<BuildRecord.CellRecord> classicLambdaCells = new ArrayList<>();
         for (BuildRecord.CellRecord cell : record.getCells()) {
             if (cell.getState().isTerminal()) {
                 continue;
@@ -522,11 +564,15 @@ public class BuildService {
                 if (cell.getMicrovmId() != null) {
                     microVmCells.add(cell);
                 }
+            } else if ("LAMBDA".equals(cell.getBackend())) {
+                if (cell.getLambdaFunctionArn() != null) {
+                    classicLambdaCells.add(cell);
+                }
             } else if (cell.getTaskArn() != null) {
                 fargateCells.add(cell);
             }
         }
-        if (fargateCells.isEmpty() && microVmCells.isEmpty()) {
+        if (fargateCells.isEmpty() && microVmCells.isEmpty() && classicLambdaCells.isEmpty()) {
             return record;
         }
 
@@ -554,6 +600,21 @@ public class BuildService {
             }
         }
 
+        if (!classicLambdaCells.isEmpty()) {
+            ClassicLambdaCellLauncher classicLambdaLauncher = classicLambdaLauncher();
+            for (BuildRecord.CellRecord cell : classicLambdaCells) {
+                CellHandle handle = new CellHandle.ClassicLambdaHandle(cell.getLambdaFunctionArn(),
+                        cell.getLambdaRequestId(), stagingPathFor(record, cell));
+                CellPollResult result = classicLambdaLauncher.poll(handle);
+                if (result.state() == ai.codriverlabs.scaleoutbuild.ecs.CellLaunchState.RUNNING
+                        && classicLambdaStatusDeadlineExceeded(record)) {
+                    result = CellPollResult.failed(null, "standard Lambda did not write status.json within "
+                            + "its 15-minute execution budget plus one-minute delivery margin");
+                }
+                changed |= applyPollResult(record, cell, result);
+            }
+        }
+
         if (changed) {
             if (record.allCellsTerminal()) {
                 boolean anyFailed = record.getCells().stream()
@@ -572,6 +633,11 @@ public class BuildService {
         BuildKind buildKind = BuildKind.parse(cell.getCell().split("/")[0]);
         Architecture architecture = Architecture.parse(cell.getCell().split("/")[1]);
         return staging.stagingPath(record.getOwnerKey(), record.getBuildId(), buildKind, architecture);
+    }
+
+    private boolean classicLambdaStatusDeadlineExceeded(BuildRecord record) {
+        return record.getStartedAt() != null
+                && !Instant.now().isBefore(record.getStartedAt().plus(CLASSIC_LAMBDA_STATUS_DEADLINE));
     }
 
     /**

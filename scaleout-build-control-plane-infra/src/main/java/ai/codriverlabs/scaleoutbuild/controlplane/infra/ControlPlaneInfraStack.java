@@ -36,6 +36,8 @@ import software.amazon.awscdk.services.iam.PolicyStatement;
 import software.amazon.awscdk.services.iam.Role;
 import software.amazon.awscdk.services.iam.ServicePrincipal;
 import software.amazon.awscdk.services.lambda.Architecture;
+import software.amazon.awscdk.services.lambda.CfnEventInvokeConfig;
+import software.amazon.awscdk.services.lambda.CfnFunction;
 import software.amazon.awscdk.services.lambda.Code;
 import software.amazon.awscdk.services.lambda.Function;
 import software.amazon.awscdk.services.lambda.FunctionUrl;
@@ -241,6 +243,79 @@ public class ControlPlaneInfraStack extends Stack {
         // direct-S3 staging mode.
         stagingBucket.grantReadWrite(taskRole);
 
+        // --- Optional standard-Lambda data plane ---------------------------------------------
+        //
+        // These are image-package Lambda functions, deliberately separate from the control-plane
+        // Function URL. They accept only asynchronous Invoke events from the service. Lambda has a
+        // fixed architecture per function, hence one worker per build architecture. The feature is
+        // deployment-disabled by default so AUTO routing and existing Fargate deployments do not
+        // change merely because the stack is upgraded.
+        boolean classicLambdaEnabled = Boolean.parseBoolean(String.valueOf(
+                this.getNode().tryGetContext("classicLambdaEnabled") == null ? "false"
+                        : this.getNode().tryGetContext("classicLambdaEnabled")));
+        CfnFunction classicLambdaX86Worker = null;
+        CfnFunction classicLambdaArmWorker = null;
+        if (classicLambdaEnabled) {
+            Role classicLambdaWorkerRole = Role.Builder.create(this, "ClassicLambdaWorkerRole")
+                    .assumedBy(new ServicePrincipal("lambda.amazonaws.com"))
+                    .description("Execution role for scaleout-build standard Lambda workers")
+                    .build();
+            // Direct-S3 agent I/O needs list/read/write only. Do not use Bucket.grantReadWrite:
+            // it includes DeleteObject, which a worker never needs and would widen its blast radius
+            // across this long-lived, shared staging bucket.
+            classicLambdaWorkerRole.addToPolicy(PolicyStatement.Builder.create()
+                    .effect(Effect.ALLOW)
+                    .actions(List.of("s3:ListBucket"))
+                    .resources(List.of(stagingBucket.getBucketArn()))
+                    .build());
+            classicLambdaWorkerRole.addToPolicy(PolicyStatement.Builder.create()
+                    .effect(Effect.ALLOW)
+                    .actions(List.of("s3:GetObject", "s3:PutObject"))
+                    .resources(List.of(stagingBucket.arnForObjects("*")))
+                    .build());
+            classicLambdaWorkerRole.addManagedPolicy(ManagedPolicy.fromAwsManagedPolicyName(
+                    "service-role/AWSLambdaBasicExecutionRole"));
+            // Both functions are sourced from the same ECR repository. Publish the architecture
+            // tags with build-local.sh --classic-lambda before enabling this CDK context; Lambda
+            // image functions cannot pull from the GHCR-only CI image publication path.
+            classicLambdaX86Worker = CfnFunction.Builder.create(this, "ClassicLambdaX86Worker")
+                    .functionName("scaleout-build-agent-lambda-x86-64")
+                    .packageType("Image")
+                    .code(CfnFunction.CodeProperty.builder()
+                            .imageUri(agentRepository.getRepositoryUri() + ":lambda-amd64").build())
+                    .role(classicLambdaWorkerRole.getRoleArn())
+                    .architectures(List.of("x86_64"))
+                    .memorySize(10240)
+                    .timeout(900)
+                    .ephemeralStorage(CfnFunction.EphemeralStorageProperty.builder().size(10240).build())
+                    .build();
+            classicLambdaArmWorker = CfnFunction.Builder.create(this, "ClassicLambdaArmWorker")
+                    .functionName("scaleout-build-agent-lambda-arm64")
+                    .packageType("Image")
+                    .code(CfnFunction.CodeProperty.builder()
+                            .imageUri(agentRepository.getRepositoryUri() + ":lambda-arm64").build())
+                    .role(classicLambdaWorkerRole.getRoleArn())
+                    .architectures(List.of("arm64"))
+                    .memorySize(10240)
+                    .timeout(900)
+                    .ephemeralStorage(CfnFunction.EphemeralStorageProperty.builder().size(10240).build())
+                    .build();
+            // A Lambda service retry can start a duplicate native-image compile against the same
+            // canonical S3 output prefix. The worker also takes a conditional S3 claim, and the
+            // event policy prevents ordinary failure retries while bounding queue delay to 60s.
+            for (CfnFunction worker : List.of(classicLambdaX86Worker, classicLambdaArmWorker)) {
+                CfnEventInvokeConfig.Builder.create(this,
+                                worker == classicLambdaX86Worker ? "ClassicLambdaX86AsyncConfig"
+                                        : "ClassicLambdaArmAsyncConfig")
+                        .functionName(worker.getRef())
+                        .qualifier("$LATEST")
+                        .maximumEventAgeInSeconds(60)
+                        .maximumRetryAttempts(0)
+                        .build();
+            }
+            agentRepository.grantPull(new ServicePrincipal("lambda.amazonaws.com"));
+        }
+
         // --- Build state ----------------------------------------------------------------------
 
         /*
@@ -349,6 +424,19 @@ public class ControlPlaneInfraStack extends Stack {
 
         buildsTable.grantReadWriteData(serviceFunction);
         stagingBucket.grantReadWrite(serviceFunction);
+        if (classicLambdaEnabled) {
+            serviceFunction.addEnvironment("SCALEOUT_CLASSIC_LAMBDA_ENABLED", "true");
+            serviceFunction.addEnvironment("SCALEOUT_CLASSIC_LAMBDA_X86_64_FUNCTION_ARN",
+                    classicLambdaX86Worker.getAttrArn());
+            serviceFunction.addEnvironment("SCALEOUT_CLASSIC_LAMBDA_ARM64_FUNCTION_ARN",
+                    classicLambdaArmWorker.getAttrArn());
+            serviceFunction.addToRolePolicy(PolicyStatement.Builder.create()
+                    .effect(Effect.ALLOW)
+                    .actions(List.of("lambda:InvokeFunction"))
+                    .resources(List.of(classicLambdaX86Worker.getAttrArn(),
+                            classicLambdaArmWorker.getAttrArn()))
+                    .build());
+        }
 
         serviceFunction.addToRolePolicy(PolicyStatement.Builder.create()
                 .effect(Effect.ALLOW)

@@ -26,7 +26,7 @@ public class ResourcePolicy {
     /** The only values {@code BuildSpec.backendPreference} may hold. See
      * {@link #validateBackendPreference} for what each means. */
     private static final java.util.Set<String> RECOGNIZED_BACKEND_PREFERENCES =
-            java.util.Set.of("auto", "fargate", "microvm");
+            java.util.Set.of("auto", "fargate", "microvm", "lambda");
 
     private final ControlPlaneConfig config;
 
@@ -132,6 +132,20 @@ public class ResourcePolicy {
         if (!RECOGNIZED_BACKEND_PREFERENCES.contains(normalized)) {
             throw new InvalidRequestException("backendPreference '" + preference
                     + "' is not recognized; allowed: " + RECOGNIZED_BACKEND_PREFERENCES);
+        }
+        if ("lambda".equals(normalized)) {
+            var classic = config.classicLambda();
+            boolean x86Needed = architectures.stream().anyMatch(a -> "x86_64".equalsIgnoreCase(a));
+            boolean armNeeded = architectures.stream().anyMatch(a -> "arm64".equalsIgnoreCase(a));
+            boolean available = classic.enabled() && config.ecs().agentUsesDirectS3Io()
+                    && (!x86Needed || classic.x86_64FunctionArn().isPresent())
+                    && (!armNeeded || classic.arm64FunctionArn().isPresent());
+            if (!available) {
+                throw new InvalidRequestException(
+                        "backendPreference 'lambda' was requested but this deployment does not have "
+                                + "a direct-S3 classic Lambda worker for every requested architecture");
+            }
+            return;
         }
         if (!"microvm".equals(normalized)) {
             return;

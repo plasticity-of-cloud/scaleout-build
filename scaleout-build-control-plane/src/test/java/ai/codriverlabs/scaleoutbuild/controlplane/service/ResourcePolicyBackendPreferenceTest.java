@@ -26,13 +26,19 @@ import org.junit.jupiter.api.Test;
 class ResourcePolicyBackendPreferenceTest {
 
     private ControlPlaneConfig.MicroVm microVm;
+    private ControlPlaneConfig.ClassicLambda classicLambda;
+    private ControlPlaneConfig.Ecs ecs;
     private ResourcePolicy policy;
 
     @BeforeEach
     void setUp() {
         ControlPlaneConfig config = mock(ControlPlaneConfig.class);
         microVm = mock(ControlPlaneConfig.MicroVm.class);
+        classicLambda = mock(ControlPlaneConfig.ClassicLambda.class);
+        ecs = mock(ControlPlaneConfig.Ecs.class);
         when(config.microVm()).thenReturn(microVm);
+        when(config.classicLambda()).thenReturn(classicLambda);
+        when(config.ecs()).thenReturn(ecs);
         policy = new ResourcePolicy(config);
     }
 
@@ -95,5 +101,27 @@ class ResourcePolicyBackendPreferenceTest {
         microVmFullyAvailable();
         policy.validateBackendPreference("microvm", List.of("arm64"));
         policy.validateBackendPreference("MicroVM", List.of("arm64"));
+    }
+
+    @Test
+    void lambdaIsAcceptedWhenAllRequestedWorkerArchitecturesAreConfigured() throws Exception {
+        when(classicLambda.enabled()).thenReturn(true);
+        when(ecs.agentUsesDirectS3Io()).thenReturn(true);
+        when(classicLambda.x86_64FunctionArn()).thenReturn(Optional.of("arn:aws:lambda:x86"));
+        when(classicLambda.arm64FunctionArn()).thenReturn(Optional.of("arn:aws:lambda:arm"));
+
+        policy.validateBackendPreference("lambda", List.of("x86_64", "arm64"));
+    }
+
+    @Test
+    void lambdaIsRejectedWhenARequestedArchitectureHasNoWorker() {
+        when(classicLambda.enabled()).thenReturn(true);
+        when(ecs.agentUsesDirectS3Io()).thenReturn(true);
+        when(classicLambda.arm64FunctionArn()).thenReturn(Optional.of("arn:aws:lambda:arm"));
+        when(classicLambda.x86_64FunctionArn()).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> policy.validateBackendPreference("lambda", List.of("x86_64", "arm64")))
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessageContaining("classic Lambda worker");
     }
 }

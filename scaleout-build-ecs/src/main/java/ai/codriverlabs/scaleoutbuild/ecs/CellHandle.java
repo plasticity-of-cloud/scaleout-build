@@ -42,4 +42,15 @@ public sealed interface CellHandle {
             return microvmId;
         }
     }
+
+    /** A standard asynchronous Lambda invocation. Lambda supplies an acceptance request id but
+     * no per-invocation state or termination API, so completion is read from the staging status
+     * report instead. */
+    record ClassicLambdaHandle(String functionArn, String requestId, String stagingRelativePath)
+            implements CellHandle {
+        @Override
+        public String describe() {
+            return functionArn + (requestId == null ? "" : " (request " + requestId + ")");
+        }
+    }
 }

@@ -38,18 +38,32 @@ fail() { echo "  FAIL: $*" >&2; FAILURES=$((FAILURES + 1)); }
 for platform in "${PLATFORM_LIST[@]}"; do
     echo "==> ${IMAGE} on ${platform}"
 
+    # Run native-image independently so its exit code cannot be hidden by a shell pipeline. The
+    # current amd64 Mandrel base emits an informational JAVA_TOOL_OPTIONS line before the version;
+    # select the version line rather than assuming the first output line is the tool's output.
+    native_image_output="$(docker run --rm --platform "$platform" --entrypoint native-image \
+        "$IMAGE" --version 2>&1)" || {
+        fail "native-image could not run for ${platform}: ${native_image_output}"
+        continue
+    }
+    ni="$(grep -m1 '^native-image' <<<"$native_image_output" || true)"
+    [[ -n "$ni" ]] || {
+        fail "native-image produced no version line for ${platform}: ${native_image_output}"
+        continue
+    }
+
+    # This command deliberately does not start a JVM, so inherited JAVA_TOOL_OPTIONS cannot add
+    # diagnostic output that would corrupt the four values being inspected.
     out="$(docker run --rm --platform "$platform" --entrypoint sh "$IMAGE" -c '
         id -u; id -g
-        native-image --version 2>&1 | head -1
         echo "${SCALEOUT_BUILD_TEMP_DIR:-<unset>}"
         echo "${SCALEOUT_BUILD_MOUNT_ROOT:-<unset>}"
-    ' 2>&1 | tail -5)" || { fail "could not run the image for ${platform}"; continue; }
+    ' 2>&1)" || { fail "could not inspect the image for ${platform}"; continue; }
 
     uid="$(sed -n 1p <<<"$out")"
     gid="$(sed -n 2p <<<"$out")"
-    ni="$(sed -n 3p <<<"$out")"
-    tmp="$(sed -n 4p <<<"$out")"
-    mount="$(sed -n 5p <<<"$out")"
+    tmp="$(sed -n 3p <<<"$out")"
+    mount="$(sed -n 4p <<<"$out")"
 
     [[ "$uid" == "1001" && "$gid" == "1001" ]] \
         || fail "expected uid/gid 1001:1001, got ${uid}:${gid} (a root container)"

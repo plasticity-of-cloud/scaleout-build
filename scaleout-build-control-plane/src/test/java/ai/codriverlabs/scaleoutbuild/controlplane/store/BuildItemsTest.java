@@ -146,6 +146,28 @@ class BuildItemsTest {
         assertThat(item).doesNotContainKey(BuildItems.ATTR_MICROVM_IDS);
     }
 
+    @Test
+    void toItem_roundTripsClassicLambdaHandleWithoutChangingLegacyFields() {
+        BuildRecord record = minimalRecord();
+        BuildRecord.CellRecord cell = new BuildRecord.CellRecord();
+        cell.setCell("NATIVE-ARM64");
+        cell.setState(ai.codriverlabs.scaleoutbuild.controlplane.api.CellState.RUNNING);
+        cell.setBackend("LAMBDA");
+        cell.setLambdaFunctionArn("arn:aws:lambda:eu-west-1:000:function:worker-arm");
+        cell.setLambdaRequestId("request-123");
+        record.setCells(List.of(cell));
+
+        BuildRecord roundTripped = BuildItems.fromItem(BuildItems.toItem(record, mapper), mapper);
+        BuildRecord.CellRecord restored = roundTripped.cell("NATIVE-ARM64");
+        assertThat(restored.getBackend()).isEqualTo("LAMBDA");
+        assertThat(restored.getLambdaFunctionArn()).endsWith("worker-arm");
+        assertThat(restored.getLambdaRequestId()).isEqualTo("request-123");
+        // Lambdas are intentionally absent from reaper task/MicroVM handle sets: standard Lambda
+        // offers no per-invocation stop operation.
+        assertThat(BuildItems.toItem(record, mapper)).doesNotContainKeys(BuildItems.ATTR_TASK_ARNS,
+                BuildItems.ATTR_MICROVM_IDS);
+    }
+
     private static BuildRecord minimalRecord() {
         BuildRecord record = new BuildRecord();
         record.setBuildId("01HXYZ");

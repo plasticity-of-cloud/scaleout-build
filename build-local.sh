@@ -32,6 +32,10 @@
 #                                                        # https://docs.docker.com/build/building/multi-platform/#qemu)
 #   ./build-local.sh --platform linux/arm64 ...         # override the target platform explicitly
 #                                                        # (single-arch modes only)
+#   ./build-local.sh --classic-lambda --push <ECR-REPO-URI>
+#                                                        # build/push one standard-Lambda worker image;
+#                                                        # run once per native architecture so the tags
+#                                                        # are lambda-amd64 and lambda-arm64
 #
 # Requires: docker buildx (bundled with modern Docker); for --push/--multi-arch against ECR, AWS
 # credentials (`aws sts get-caller-identity` must succeed) and the AWS CLI. ECR login and
@@ -46,6 +50,7 @@ DOCKERFILE="${REPO_ROOT}/scaleout-build-agent/Dockerfile"
 PUSH=false
 MULTI_ARCH=false
 FUNCTION_MODE=""
+CLASSIC_LAMBDA=false
 IMAGE_URI=""
 PLATFORM=""
 
@@ -68,6 +73,10 @@ while [[ $# -gt 0 ]]; do
         --function)
             FUNCTION_MODE="${2:?--function requires jvm or native}"
             shift 2
+            ;;
+        --classic-lambda)
+            CLASSIC_LAMBDA=true
+            shift
             ;;
         -h|--help)
             grep '^#' "$0" | sed 's/^# \{0,1\}//'
@@ -129,6 +138,17 @@ if $PUSH && $MULTI_ARCH; then
     echo "--push and --multi-arch are mutually exclusive — --multi-arch already pushes." >&2
     exit 1
 fi
+if $CLASSIC_LAMBDA && $MULTI_ARCH; then
+    echo "--classic-lambda requires one native architecture per push, so it cannot use --multi-arch." >&2
+    exit 1
+fi
+if $CLASSIC_LAMBDA && ! $PUSH; then
+    echo "--classic-lambda requires --push <ECR-REPO-URI>; Lambda deploys container images from ECR." >&2
+    exit 1
+fi
+if $CLASSIC_LAMBDA; then
+    DOCKERFILE="${REPO_ROOT}/scaleout-build-agent/src/main/resources/classic-lambda/Dockerfile"
+fi
 
 # Logs in to ECR and creates the repository if it doesn't exist yet, given a full repo URI
 # (<account>.dkr.ecr.<region>.amazonaws.com/<name>). Mirrors KubeECS's own build-local.sh, which
@@ -176,6 +196,13 @@ mvn -q -pl scaleout-build-shared,scaleout-build-agent -am install -DskipTests
     exit 1
 }
 
+DOCKER_CONTEXT="$REPO_ROOT"
+if $CLASSIC_LAMBDA; then
+    DOCKER_CONTEXT="${REPO_ROOT}/scaleout-build-agent/target/classic-lambda"
+    mkdir -p "$DOCKER_CONTEXT"
+    cp "${REPO_ROOT}/scaleout-build-agent/target/agent.jar" "$DOCKER_CONTEXT/agent.jar"
+fi
+
 if $MULTI_ARCH; then
     ecr_login_and_ensure_repo "$IMAGE_URI"
     TAG="${IMAGE_URI}:latest"
@@ -188,13 +215,17 @@ if $MULTI_ARCH; then
         -f "$DOCKERFILE" \
         -t "$TAG" \
         --push \
-        "$REPO_ROOT"
+        "$DOCKER_CONTEXT"
     echo "==> Pushed multi-arch manifest ${TAG}"
     docker buildx imagetools inspect "$TAG"
 elif $PUSH; then
     ecr_login_and_ensure_repo "$IMAGE_URI"
     ARCH_SUFFIX="${PLATFORM#linux/}"
-    TAG="${IMAGE_URI}:${ARCH_SUFFIX}"
+    if $CLASSIC_LAMBDA; then
+        TAG="${IMAGE_URI}:lambda-${ARCH_SUFFIX}"
+    else
+        TAG="${IMAGE_URI}:${ARCH_SUFFIX}"
+    fi
     echo "==> Building and pushing ${TAG} for platform ${PLATFORM} (base ${BASE_IMAGE})"
     docker buildx build \
         --platform "$PLATFORM" \
@@ -202,7 +233,7 @@ elif $PUSH; then
         -f "$DOCKERFILE" \
         -t "$TAG" \
         --push \
-        "$REPO_ROOT"
+        "$DOCKER_CONTEXT"
     echo "==> Pushed ${TAG}"
     echo "    To assemble a multi-arch manifest once both arch tags are pushed:"
     echo "      docker buildx imagetools create -t ${IMAGE_URI}:latest ${IMAGE_URI}:amd64 ${IMAGE_URI}:arm64"

@@ -51,6 +51,10 @@
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>lambdamicrovms</artifactId>
         </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>lambda</artifactId>
+        </dependency>
         <!--
           MicroVmCellLauncher serializes a cell's agent environment as the runHookPayload JSON
           body (RunMicrovmRequest.runHookPayload is a plain String, not a KeyValuePair list; see

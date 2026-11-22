@@ -65,6 +65,10 @@ public final class BuildRecord {
          * {@code CellHandle.MicroVmHandle}'s javadoc for why). Null for Fargate cells.
          */
         private String microvmEndpoint;
+        /** Deployed standard Lambda worker function used for a Lambda-backed cell. */
+        private String lambdaFunctionArn;
+        /** AWS request id returned when the asynchronous invoke was accepted; diagnostic only. */
+        private String lambdaRequestId;
 
         public String getCell() {
             return cell;
@@ -121,6 +125,22 @@ public final class BuildRecord {
 
         public void setMicrovmEndpoint(String microvmEndpoint) {
             this.microvmEndpoint = microvmEndpoint;
+        }
+
+        public String getLambdaFunctionArn() {
+            return lambdaFunctionArn;
+        }
+
+        public void setLambdaFunctionArn(String lambdaFunctionArn) {
+            this.lambdaFunctionArn = lambdaFunctionArn;
+        }
+
+        public String getLambdaRequestId() {
+            return lambdaRequestId;
+        }
+
+        public void setLambdaRequestId(String lambdaRequestId) {
+            this.lambdaRequestId = lambdaRequestId;
         }
 
         public Integer getExitCode() {

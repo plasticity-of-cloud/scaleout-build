@@ -1,0 +1,11 @@
+# Copy to deployment.properties (gitignored) and set the deployed control-plane endpoint.
+# The client needs no worker-function ARN, ECR URI, cluster, bucket, role, subnet, or log group:
+# backend placement remains server-owned. The control plane validates backendPreference=lambda
+# against its architecture-specific Lambda Event Function worker configuration.
+#
+# Get the endpoint with:
+#   aws ssm get-parameter --name /scaleout-build/control-plane/endpoint \
+#       --query Parameter.Value --output text
+#
+# The caller needs lambda:InvokeFunctionUrl and lambda:InvokeFunction on the control-plane function.
+scaleout-build.endpoint=https://EXAMPLE123.lambda-url.eu-west-1.on.aws/

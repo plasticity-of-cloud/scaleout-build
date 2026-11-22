@@ -18,7 +18,7 @@ import java.util.List;
  *
  * <p><b>{@code backendPreference} is the one deliberate, documented exception to that rule.</b>
  * It still names no infrastructure directly (no cluster, role, bucket, or image ARN crosses the
- * wire) — it only expresses which compute backend an {@code arm64} cell should prefer, and the
+ * wire) — it only expresses which compute backend a cell should prefer, and the
  * server has the final say regardless of what is requested (see
  * {@code ResourcePolicy.validateBackendPreference} and {@code BuildService.cellLauncher}).
  *
@@ -65,12 +65,14 @@ import java.util.List;
  *                              that existed before this field), {@code fargate}
  *                              (force every cell in this build onto Fargate, including
  *                              {@code arm64} ones, regardless of the deployment's own default), or
- *                              {@code microvm} (force {@code arm64} cells onto Lambda MicroVM —
- *                              itself opt-in, never a default; rejected at build-creation time,
- *                              not silently substituted, if the deployment has not enabled it or
- *                              if any requested architecture is {@code x86_64}, which MicroVM
- *                              genuinely cannot run). Case-insensitive; blank or {@code null}
- *                              means {@code auto}.
+ *                              {@code microvm} (force {@code arm64} cells onto Lambda MicroVM), or
+ *                              {@code lambda} (force architecture-matched standard Lambda workers).
+ *                              Lambda is asynchronous and uses durable S3 status reporting; it has
+ *                              a 15-minute maximum invocation timeout and no per-invocation hard
+ *                              cancellation API. An explicit Lambda request is rejected when its
+ *                              direct-S3 worker functions are not enabled for every requested
+ *                              architecture. Case-insensitive; blank or {@code null} means
+ *                              {@code auto}.
  */
 public record BuildSpec(List<String> buildKinds, List<String> architectures, String mainClass,
                         String imageName, String nativeImageCommand,

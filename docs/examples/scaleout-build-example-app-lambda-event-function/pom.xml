@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Example project exercising scaleout-build through AWS Lambda Event Functions. The control plane
+  routes both architecture-specific cells to deployed container-image workers asynchronously; the
+  plugin still receives artifacts through its normal service protocol.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>ai.codriverlabs.example</groupId>
+    <artifactId>scaleout-build-example-app-lambda-event-function</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+
+    <name>scaleout-build Lambda Event Function example</name>
+    <description>Minimal application built remotely through AWS Lambda Event Functions.</description>
+
+    <properties>
+        <maven.compiler.release>21</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+            <version>3.19.0</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>scaleout-build-example-app-lambda-event-function</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>properties-maven-plugin</artifactId>
+                <version>1.3.1</version>
+                <executions>
+                    <execution>
+                        <phase>validate</phase>
+                        <goals><goal>read-project-properties</goal></goals>
+                        <configuration><files><file>deployment.properties</file></files></configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.4.2</version>
+                <configuration>
+                    <archive><manifest><mainClass>ai.codriverlabs.example.HelloNative</mainClass></manifest></archive>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>ai.codriverlabs</groupId>
+                <artifactId>scaleout-build-maven-plugin</artifactId>
+                <version>1.0.1</version>
+                <executions>
+                    <execution>
+                        <id>native-image-on-lambda-event-functions</id>
+                        <phase>package</phase>
+                        <goals><goal>build</goal></goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <buildKinds><buildKind>native</buildKind></buildKinds>
+                    <architectures>
+                        <architecture>x86_64</architecture>
+                        <architecture>arm64</architecture>
+                    </architectures>
+                    <mainClass>ai.codriverlabs.example.HelloNative</mainClass>
+                    <imageName>hello-native</imageName>
+                    <forceRemote>true</forceRemote>
+                    <!-- Explicit: do not depend on the deployment's unchanged auto routing. -->
+                    <backendPreference>lambda</backendPreference>
+                    <endpoint>${scaleout-build.endpoint}</endpoint>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

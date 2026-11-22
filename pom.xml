@@ -130,6 +130,9 @@
         <maven-shade-plugin.version>3.6.2</maven-shade-plugin.version>
         <maven-jar-plugin.version>3.5.1</maven-jar-plugin.version>
         <jib-maven-plugin.version>3.5.2</jib-maven-plugin.version>
+        <!-- Regular-Lambda worker runtime dependencies, resolved against Central before pinning. -->
+        <aws-lambda-java-core.version>1.4.1</aws-lambda-java-core.version>
+        <aws-lambda-java-runtime-interface-client.version>2.12.2</aws-lambda-java-runtime-interface-client.version>
     </properties>
 
     <dependencyManagement>

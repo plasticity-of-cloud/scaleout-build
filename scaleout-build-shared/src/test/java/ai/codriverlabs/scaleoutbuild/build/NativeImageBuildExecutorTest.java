@@ -121,6 +121,7 @@ class NativeImageBuildExecutorTest {
                 .buildKind(BuildKind.NATIVE_PGO_INSTRUMENT)
                 .architecture(Architecture.host().orElse(Architecture.X86_64))
                 .stagingRelativePath(stagingRelativePath)
+                .expectedArtifacts(List.of("app"))
                 .build();
 
         executor.execute(request, BuildLog.discarding());
@@ -148,6 +149,7 @@ class NativeImageBuildExecutorTest {
                 .buildKind(BuildKind.NATIVE_PGO_OPTIMIZE)
                 .architecture(Architecture.host().orElse(Architecture.X86_64))
                 .stagingRelativePath(stagingRelativePath)
+                .expectedArtifacts(List.of("app"))
                 .profileRelativePath("default.iprof")
                 .build();
 

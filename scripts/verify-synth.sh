@@ -111,7 +111,7 @@ for mode, want in {
 
     if mode == "jvm":
         # Explicitly exercise the optional classic Lambda data plane. Image package functions must
-        # remain private workers: no handler/runtime fields, fixed 15-minute timeout, fixed 10 GiB
+        # remain private workers: no handler/runtime fields, fixed 30-minute timeout, fixed 10 GiB
         # memory and /tmp storage, and exactly one function for each CPU architecture.
         workers = [f for f in functions if f.get("PackageType") == "Image"]
         if len(workers) != 2:
@@ -124,7 +124,7 @@ for mode, want in {
                     failures.append(f"{mode}: missing classic Lambda {arch} worker")
                     continue
                 check(mode, f"lambda.{arch}.memory", worker.get("MemorySize"), 10240)
-                check(mode, f"lambda.{arch}.timeout", worker.get("Timeout"), 900)
+                check(mode, f"lambda.{arch}.timeout", worker.get("Timeout"), 1800)
                 check(mode, f"lambda.{arch}.ephemeralStorage",
                       (worker.get("EphemeralStorage") or {}).get("Size"), 10240)
                 if tag not in str((worker.get("Code") or {}).get("ImageUri")):

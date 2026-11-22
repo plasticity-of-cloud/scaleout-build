@@ -62,8 +62,8 @@ public class BuildService {
      * entrypoint wrapper. {@code AgentMain} never exits with it, so it is unambiguous.
      */
     private static final int CONTAINER_TIMEOUT_EXIT_CODE = 124;
-    /** Standard Lambda is limited to 900s; async delivery is capped to 60s by CDK. */
-    private static final Duration CLASSIC_LAMBDA_STATUS_DEADLINE = Duration.ofMinutes(16);
+    /** On-demand Lambda Event Functions are limited to 1,800s; async delivery is capped to 60s by CDK. */
+    private static final Duration CLASSIC_LAMBDA_STATUS_DEADLINE = Duration.ofMinutes(31);
 
     private static final Logger LOG = Logger.getLogger(BuildService.class);
 
@@ -255,10 +255,10 @@ public class BuildService {
                 CellLauncher launcher = cellLauncher(architecture,
                         record.getBuildSpec().backendPreference());
                 int cellTimeout = policy.resolveCellTimeoutMinutes(record.getBuildSpec().timeoutMinutes());
-                // Leave one minute for artifact/status publication before Lambda's fixed 900-second
+                // Leave one minute for artifact/status publication before Lambda's fixed 1,800-second
                 // deadline. Fargate and MicroVM preserve their independently configured budgets.
                 if (launcher instanceof ClassicLambdaCellLauncher) {
-                    cellTimeout = Math.min(cellTimeout, 14);
+                    cellTimeout = Math.min(cellTimeout, 29);
                 }
                 staging.materializeCell(record.getOwnerKey(), record.getBuildId(), buildKind,
                         architecture, record.getInputs());
@@ -609,7 +609,7 @@ public class BuildService {
                 if (result.state() == ai.codriverlabs.scaleoutbuild.ecs.CellLaunchState.RUNNING
                         && classicLambdaStatusDeadlineExceeded(record)) {
                     result = CellPollResult.failed(null, "standard Lambda did not write status.json within "
-                            + "its 15-minute execution budget plus one-minute delivery margin");
+                            + "its 30-minute execution budget plus one-minute delivery margin");
                 }
                 changed |= applyPollResult(record, cell, result);
             }

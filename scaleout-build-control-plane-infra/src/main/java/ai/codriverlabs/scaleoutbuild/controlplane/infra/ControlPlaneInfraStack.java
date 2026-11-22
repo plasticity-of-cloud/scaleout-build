@@ -286,7 +286,7 @@ public class ControlPlaneInfraStack extends Stack {
                     .role(classicLambdaWorkerRole.getRoleArn())
                     .architectures(List.of("x86_64"))
                     .memorySize(10240)
-                    .timeout(900)
+                    .timeout(1800)
                     .ephemeralStorage(CfnFunction.EphemeralStorageProperty.builder().size(10240).build())
                     .build();
             classicLambdaArmWorker = CfnFunction.Builder.create(this, "ClassicLambdaArmWorker")
@@ -297,7 +297,7 @@ public class ControlPlaneInfraStack extends Stack {
                     .role(classicLambdaWorkerRole.getRoleArn())
                     .architectures(List.of("arm64"))
                     .memorySize(10240)
-                    .timeout(900)
+                    .timeout(1800)
                     .ephemeralStorage(CfnFunction.EphemeralStorageProperty.builder().size(10240).build())
                     .build();
             // A Lambda service retry can start a duplicate native-image compile against the same

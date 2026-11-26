@@ -134,16 +134,16 @@ public class ResourcePolicy {
                     + "' is not recognized; allowed: " + RECOGNIZED_BACKEND_PREFERENCES);
         }
         if ("lambda".equals(normalized)) {
-            var classic = config.classicLambda();
+            var eventFunction = config.lambdaEventFunction();
             boolean x86Needed = architectures.stream().anyMatch(a -> "x86_64".equalsIgnoreCase(a));
             boolean armNeeded = architectures.stream().anyMatch(a -> "arm64".equalsIgnoreCase(a));
-            boolean available = classic.enabled() && config.ecs().agentUsesDirectS3Io()
-                    && (!x86Needed || classic.x86_64FunctionArn().isPresent())
-                    && (!armNeeded || classic.arm64FunctionArn().isPresent());
+            boolean available = eventFunction.enabled() && config.ecs().agentUsesDirectS3Io()
+                    && (!x86Needed || eventFunction.x86_64FunctionArn().isPresent())
+                    && (!armNeeded || eventFunction.arm64FunctionArn().isPresent());
             if (!available) {
                 throw new InvalidRequestException(
                         "backendPreference 'lambda' was requested but this deployment does not have "
-                                + "a direct-S3 classic Lambda worker for every requested architecture");
+                                + "a direct-S3 Lambda Event Function worker for every requested architecture");
             }
             return;
         }

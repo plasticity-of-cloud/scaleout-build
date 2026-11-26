@@ -30,19 +30,19 @@ import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 
 @ExtendWith(MockitoExtension.class)
-class ClassicLambdaCellLauncherTest {
+class LambdaEventFunctionCellLauncherTest {
     private static final String X86_FUNCTION = "arn:aws:lambda:eu-west-1:123:function:worker-x86";
     private static final String ARM_FUNCTION = "arn:aws:lambda:eu-west-1:123:function:worker-arm";
     private static final String STAGING_PATH = "builds/example/native/arm64";
 
     @Mock LambdaClient lambda;
     @Mock S3Client s3;
-    private ClassicLambdaCellLauncher launcher;
+    private LambdaEventFunctionCellLauncher launcher;
 
     @BeforeEach
     void setUp() {
-        launcher = new ClassicLambdaCellLauncher(lambda, s3,
-                new ClassicLambdaSettings(X86_FUNCTION, ARM_FUNCTION), "staging");
+        launcher = new LambdaEventFunctionCellLauncher(lambda, s3,
+                new LambdaEventFunctionSettings(X86_FUNCTION, ARM_FUNCTION), "staging");
     }
 
     @Test
@@ -60,7 +60,7 @@ class ClassicLambdaCellLauncherTest {
         Map<String, String> event = new ObjectMapper().readValue(invoke.payload().asByteArray(),
                 new com.fasterxml.jackson.core.type.TypeReference<>() { });
         assertThat(event).containsEntry("SCALEOUT_BUILD_ID", "example");
-        assertThat(handle).isEqualTo(new CellHandle.ClassicLambdaHandle(ARM_FUNCTION, null, STAGING_PATH));
+        assertThat(handle).isEqualTo(new CellHandle.LambdaEventFunctionHandle(ARM_FUNCTION, null, STAGING_PATH));
     }
 
     @Test
@@ -71,7 +71,7 @@ class ClassicLambdaCellLauncherTest {
                  "artifacts":[],"completedAt":"2026-11-21T00:00:00Z"}
                 """).getBytes(StandardCharsets.UTF_8)));
 
-        CellPollResult result = launcher.poll(new CellHandle.ClassicLambdaHandle(ARM_FUNCTION, null,
+        CellPollResult result = launcher.poll(new CellHandle.LambdaEventFunctionHandle(ARM_FUNCTION, null,
                 STAGING_PATH));
 
         assertThat(result.state()).isEqualTo(CellLaunchState.SUCCEEDED);
@@ -83,13 +83,13 @@ class ClassicLambdaCellLauncherTest {
         when(s3.getObjectAsBytes(any(java.util.function.Consumer.class)))
                 .thenThrow(NoSuchKeyException.builder().build());
 
-        assertThat(launcher.poll(new CellHandle.ClassicLambdaHandle(X86_FUNCTION, null, STAGING_PATH)).state())
+        assertThat(launcher.poll(new CellHandle.LambdaEventFunctionHandle(X86_FUNCTION, null, STAGING_PATH)).state())
                 .isEqualTo(CellLaunchState.RUNNING);
     }
 
     @Test
     void stop_writesACancellationMarkerForQueuedEvents() {
-        launcher.stop(new CellHandle.ClassicLambdaHandle(ARM_FUNCTION, null, STAGING_PATH), "cancelled");
+        launcher.stop(new CellHandle.LambdaEventFunctionHandle(ARM_FUNCTION, null, STAGING_PATH), "cancelled");
 
         ArgumentCaptor<software.amazon.awssdk.services.s3.model.PutObjectRequest> request =
                 ArgumentCaptor.forClass(software.amazon.awssdk.services.s3.model.PutObjectRequest.class);

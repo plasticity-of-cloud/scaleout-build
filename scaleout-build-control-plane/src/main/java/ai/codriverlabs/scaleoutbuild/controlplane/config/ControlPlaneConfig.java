@@ -128,10 +128,10 @@ public interface ControlPlaneConfig {
 
     MicroVm microVm();
 
-    ClassicLambda classicLambda();
+    LambdaEventFunction lambdaEventFunction();
 
-    /** Configuration for the standard asynchronous Lambda worker backend. */
-    interface ClassicLambda {
+    /** Configuration for the asynchronous AWS Lambda Event Function worker backend. */
+    interface LambdaEventFunction {
         /** Explicit opt-in, retaining Fargate as the unchanged auto-routing default. */
         @WithDefault("false")
         boolean enabled();

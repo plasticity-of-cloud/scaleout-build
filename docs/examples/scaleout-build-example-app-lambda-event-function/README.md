@@ -6,7 +6,7 @@ makes the control plane asynchronously invoke an architecture-matched **AWS Lamb
 for each build cell.
 
 The sample intentionally builds both `x86_64` and `arm64` remotely. It proves that one deployed
-worker function is not reused across architectures: standard Lambda Event Functions have a fixed
+worker function is not reused across architectures: Lambda Event Functions have a fixed
 architecture, so the control plane selects the configured x86_64 or arm64 function per cell.
 
 ## Prerequisites
@@ -15,10 +15,10 @@ The control plane must be deployed with Lambda Event Functions enabled. Before e
 context, publish the two worker images to the stack's `AgentRepositoryUri` ECR repository:
 
 ```bash
-./build-local.sh --classic-lambda --push <AgentRepositoryUri> --platform linux/amd64
-./build-local.sh --classic-lambda --push <AgentRepositoryUri> --platform linux/arm64
+./build-local.sh --lambda-event-function --push <AgentRepositoryUri> --platform linux/amd64
+./build-local.sh --lambda-event-function --push <AgentRepositoryUri> --platform linux/arm64
 cd scaleout-build-control-plane-infra
-cdk deploy -c classicLambdaEnabled=true -c runtimeMode=jvm -c development=true
+cdk deploy -c lambdaEventFunctionEnabled=true -c runtimeMode=jvm -c development=true
 ```
 
 The stack creates two private worker functions, each with a 30-minute timeout. The Maven client
@@ -64,5 +64,5 @@ Cancellation writes a durable marker that prevents queued workers from starting.
 terminate an already-running named event invocation, so an in-progress `native-image` execution
 continues until it finishes or reaches the worker's 30-minute timeout.
 
-See [the Lambda Event Function backend design](../../design/control-plane/classic-lambda-build-backend.md)
+See [the Lambda Event Function backend design](../../design/control-plane/lambda-event-function-build-backend.md)
 for fixed resource sizing, timeout behavior, pricing trade-offs, and production constraints.

@@ -15,10 +15,10 @@ import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 
 /**
- * Standard Lambda event handler for one asynchronous build cell.
+ * Lambda Event Function event handler for one asynchronous build cell.
  *
  * <p>Its input is the JSON encoding of the same {@code SCALEOUT_BUILD_*} map passed as task
- * environment variables to ECS. It intentionally uses direct S3 I/O: a standard Lambda has no
+ * environment variables to ECS. It intentionally uses direct S3 I/O: a Lambda Event Function has no
  * ECS mount, so the worker downloads staged inputs and writes both artifacts and {@code status.json}
  * to the shared staging bucket. Completion therefore remains durable and pull-based, rather than
  * treating an asynchronous Invoke acceptance as build completion.
@@ -35,10 +35,10 @@ public final class AgentLambdaHandler implements RequestStreamHandler {
         } catch (RuntimeException e) {
             // Invalid events cannot name a safe status location. Fail the invocation so Lambda's
             // configured on-failure destination records it instead of claiming an unknown build ran.
-            throw new IOException("Invalid classic Lambda build event: " + e.getMessage(), e);
+            throw new IOException("Invalid Lambda Event Function build event: " + e.getMessage(), e);
         }
 
-        LOG.info("Starting build agent (classic Lambda event) with {}", config);
+        LOG.info("Starting build agent (Lambda Event Function event) with {}", config);
         try (S3Client s3 = S3Client.create()) {
             if (cancelled(s3, config)) {
                 LOG.info("Skipping cancelled Lambda build {}", config.buildId());
@@ -51,7 +51,7 @@ public final class AgentLambdaHandler implements RequestStreamHandler {
             int exitCode = AgentMain.runWithDirectS3Io(config,
                     ai.codriverlabs.scaleoutbuild.build.BuildLog.defaultLog(), s3);
             // Reuse the exact status wire writer used by the MicroVM hook server. This avoids
-            // backend-specific result schemas and keeps ClassicLambdaCellLauncher's S3 polling
+            // backend-specific result schemas and keeps LambdaEventFunctionCellLauncher's S3 polling
             // compatible with existing artifact/status tooling.
             new AgentHookServer(s3).writeStatusJson(config, exitCode);
             output.write(("{\"buildId\":\"" + config.buildId() + "\",\"exitCode\":" + exitCode

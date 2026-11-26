@@ -32,10 +32,12 @@
 #                                                        # https://docs.docker.com/build/building/multi-platform/#qemu)
 #   ./build-local.sh --platform linux/arm64 ...         # override the target platform explicitly
 #                                                        # (single-arch modes only)
-#   ./build-local.sh --classic-lambda --push <ECR-REPO-URI>
-#                                                        # build/push one standard-Lambda worker image;
+#   ./build-local.sh --lambda-event-function --push <ECR-REPO-URI>
+#                                                        # build/push one Event Function worker image;
 #                                                        # run once per native architecture so the tags
 #                                                        # are lambda-amd64 and lambda-arm64
+#   ./build-local.sh --classic-lambda --push <ECR-REPO-URI>
+#                                                        # deprecated compatibility alias
 #
 # Requires: docker buildx (bundled with modern Docker); for --push/--multi-arch against ECR, AWS
 # credentials (`aws sts get-caller-identity` must succeed) and the AWS CLI. ECR login and
@@ -50,7 +52,7 @@ DOCKERFILE="${REPO_ROOT}/scaleout-build-agent/Dockerfile"
 PUSH=false
 MULTI_ARCH=false
 FUNCTION_MODE=""
-CLASSIC_LAMBDA=false
+LAMBDA_EVENT_FUNCTION=false
 IMAGE_URI=""
 PLATFORM=""
 
@@ -74,8 +76,9 @@ while [[ $# -gt 0 ]]; do
             FUNCTION_MODE="${2:?--function requires jvm or native}"
             shift 2
             ;;
-        --classic-lambda)
-            CLASSIC_LAMBDA=true
+        --lambda-event-function|--classic-lambda)
+            # Keep the old spelling as a compatibility alias for existing automation.
+            LAMBDA_EVENT_FUNCTION=true
             shift
             ;;
         -h|--help)
@@ -138,16 +141,16 @@ if $PUSH && $MULTI_ARCH; then
     echo "--push and --multi-arch are mutually exclusive — --multi-arch already pushes." >&2
     exit 1
 fi
-if $CLASSIC_LAMBDA && $MULTI_ARCH; then
-    echo "--classic-lambda requires one native architecture per push, so it cannot use --multi-arch." >&2
+if $LAMBDA_EVENT_FUNCTION && $MULTI_ARCH; then
+    echo "--lambda-event-function requires one native architecture per push, so it cannot use --multi-arch." >&2
     exit 1
 fi
-if $CLASSIC_LAMBDA && ! $PUSH; then
-    echo "--classic-lambda requires --push <ECR-REPO-URI>; Lambda deploys container images from ECR." >&2
+if $LAMBDA_EVENT_FUNCTION && ! $PUSH; then
+    echo "--lambda-event-function requires --push <ECR-REPO-URI>; Lambda deploys container images from ECR." >&2
     exit 1
 fi
-if $CLASSIC_LAMBDA; then
-    DOCKERFILE="${REPO_ROOT}/scaleout-build-agent/src/main/resources/classic-lambda/Dockerfile"
+if $LAMBDA_EVENT_FUNCTION; then
+    DOCKERFILE="${REPO_ROOT}/scaleout-build-agent/src/main/resources/lambda-event-function/Dockerfile"
 fi
 
 # Logs in to ECR and creates the repository if it doesn't exist yet, given a full repo URI
@@ -197,8 +200,8 @@ mvn -q -pl scaleout-build-shared,scaleout-build-agent -am install -DskipTests
 }
 
 DOCKER_CONTEXT="$REPO_ROOT"
-if $CLASSIC_LAMBDA; then
-    DOCKER_CONTEXT="${REPO_ROOT}/scaleout-build-agent/target/classic-lambda"
+if $LAMBDA_EVENT_FUNCTION; then
+    DOCKER_CONTEXT="${REPO_ROOT}/scaleout-build-agent/target/lambda-event-function"
     mkdir -p "$DOCKER_CONTEXT"
     cp "${REPO_ROOT}/scaleout-build-agent/target/agent.jar" "$DOCKER_CONTEXT/agent.jar"
 fi
@@ -221,7 +224,7 @@ if $MULTI_ARCH; then
 elif $PUSH; then
     ecr_login_and_ensure_repo "$IMAGE_URI"
     ARCH_SUFFIX="${PLATFORM#linux/}"
-    if $CLASSIC_LAMBDA; then
+    if $LAMBDA_EVENT_FUNCTION; then
         TAG="${IMAGE_URI}:lambda-${ARCH_SUFFIX}"
     else
         TAG="${IMAGE_URI}:${ARCH_SUFFIX}"

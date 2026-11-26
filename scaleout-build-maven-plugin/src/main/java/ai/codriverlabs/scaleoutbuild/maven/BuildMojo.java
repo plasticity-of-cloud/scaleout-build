@@ -102,12 +102,10 @@ public class BuildMojo extends AbstractMojo {
     private String imageName;
 
     /**
-     * Which compute backend {@code arm64} cells should prefer: {@code auto} (default — the
-     * deployment's own policy decides, exactly as before this parameter existed), {@code fargate}
-     * (force Fargate even on a deployment that defaults {@code arm64} to Lambda MicroVM), or
-     * {@code microvm} (force Lambda MicroVM; rejected by the control plane, not silently
-     * substituted, if the deployment does not have it enabled or if {@code x86_64} is also
-     * requested — MicroVM genuinely cannot run it).
+     * Which remote compute backend cells should use: {@code auto} (default — the deployment's
+     * policy decides), {@code fargate}, {@code microvm} (ARM64 only), or {@code lambda} (an
+     * architecture-specific AWS Lambda Event Function). Explicit unavailable choices are rejected
+     * by the control plane rather than silently substituted.
      *
      * <p>Real pricing data is why this exists as a client choice at all, not just a deployment
      * default: MicroVM's per-unit vCPU-second and memory-GB-second rates run roughly 3–3.7x

@@ -20,13 +20,18 @@ Every parameter is settable as `-Dscaleout-build.<name>` or as a `<configuration
 | `requestedCpu` | `4096` | Worker vCPU units; 4096 = 4 vCPU |
 | `requestedMemory` | `8192` | Worker MiB. 8 GiB is a floor — 4 GiB OOMs on real projects |
 | `requestedEphemeralStorageGiB` | `0` | `0` means omit, which yields the free 20 GiB |
-| `backendPreference` | `auto` | Which compute backend `arm64` cells should prefer: `auto` (deployment's own default — Fargate out of the box), `fargate` (force Fargate), or `microvm` (force Lambda MicroVM, opt-in only — rejected, not silently substituted, if the deployment has not enabled it, or if `x86_64` is also requested). See "Choosing a backend for `arm64`" below before setting this to `microvm` |
+| `backendPreference` | `auto` | Compute placement: `auto` (deployment default), `fargate`, `microvm` (ARM64 only), or `lambda` (an architecture-specific Lambda Event Function). Explicit unavailable choices are rejected rather than silently substituted. See "Choosing a remote backend" below |
 
-## Choosing a backend for `arm64`
+## Choosing a remote backend
 
-**Fargate is the default on both axes.** A deployment ships with Lambda MicroVM disabled
-(`scaleout.micro-vm.enabled=false`), and `backendPreference` itself defaults to `auto`, which on
-such a deployment resolves to Fargate exactly as it always did. Reaching MicroVM requires an
+**Fargate is the default on both axes.** A deployment ships with Lambda MicroVM and Lambda Event
+Function workers disabled. `backendPreference=auto` therefore resolves to Fargate out of the box.
+`microvm` forces an enabled ARM64 MicroVM worker. `lambda` forces an enabled, architecture-specific
+Lambda Event Function worker and can cover both x86_64 and ARM64 when both functions are configured.
+The Event Function backend has deployment-fixed memory and ephemeral storage and a 30-minute
+invocation ceiling; see the [backend design](../design/control-plane/lambda-event-function-build-backend.md).
+
+Reaching MicroVM requires an
 operator to deliberately enable it for the deployment, and this is cost-driven, not incidental —
 see below. `backendPreference` lets you, as a developer, override whatever the deployment has
 chosen, in either direction, for your own build only.

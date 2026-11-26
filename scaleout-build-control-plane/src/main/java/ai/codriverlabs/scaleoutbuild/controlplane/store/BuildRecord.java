@@ -65,7 +65,7 @@ public final class BuildRecord {
          * {@code CellHandle.MicroVmHandle}'s javadoc for why). Null for Fargate cells.
          */
         private String microvmEndpoint;
-        /** Deployed standard Lambda worker function used for a Lambda-backed cell. */
+        /** Deployed Lambda Event Function worker function used for a Lambda-backed cell. */
         private String lambdaFunctionArn;
         /** AWS request id returned when the asynchronous invoke was accepted; diagnostic only. */
         private String lambdaRequestId;

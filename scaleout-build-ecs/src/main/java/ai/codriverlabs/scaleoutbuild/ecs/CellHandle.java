@@ -43,10 +43,10 @@ public sealed interface CellHandle {
         }
     }
 
-    /** A standard asynchronous Lambda invocation. Lambda supplies an acceptance request id but
-     * no per-invocation state or termination API, so completion is read from the staging status
-     * report instead. */
-    record ClassicLambdaHandle(String functionArn, String requestId, String stagingRelativePath)
+    /** An asynchronous Lambda Event Function invocation. Event invocation returns acceptance but
+     * no per-invocation identifier, state, or termination API, so completion is read from the
+     * staging status report. {@code requestId} remains nullable for persisted-record compatibility. */
+    record LambdaEventFunctionHandle(String functionArn, String requestId, String stagingRelativePath)
             implements CellHandle {
         @Override
         public String describe() {

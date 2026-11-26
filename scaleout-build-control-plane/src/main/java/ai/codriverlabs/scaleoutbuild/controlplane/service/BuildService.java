@@ -24,8 +24,8 @@ import ai.codriverlabs.scaleoutbuild.controlplane.store.BuildRecord;
 import ai.codriverlabs.scaleoutbuild.controlplane.store.BuildRepository;
 import ai.codriverlabs.scaleoutbuild.ecs.AgentContainerSettings;
 import ai.codriverlabs.scaleoutbuild.ecs.AgentEnvironment;
-import ai.codriverlabs.scaleoutbuild.ecs.ClassicLambdaCellLauncher;
-import ai.codriverlabs.scaleoutbuild.ecs.ClassicLambdaSettings;
+import ai.codriverlabs.scaleoutbuild.ecs.LambdaEventFunctionCellLauncher;
+import ai.codriverlabs.scaleoutbuild.ecs.LambdaEventFunctionSettings;
 import ai.codriverlabs.scaleoutbuild.ecs.CellHandle;
 import ai.codriverlabs.scaleoutbuild.ecs.CellLaunchException;
 import ai.codriverlabs.scaleoutbuild.ecs.CellLaunchRequest;
@@ -63,7 +63,7 @@ public class BuildService {
      */
     private static final int CONTAINER_TIMEOUT_EXIT_CODE = 124;
     /** On-demand Lambda Event Functions are limited to 1,800s; async delivery is capped to 60s by CDK. */
-    private static final Duration CLASSIC_LAMBDA_STATUS_DEADLINE = Duration.ofMinutes(31);
+    private static final Duration LAMBDA_EVENT_FUNCTION_STATUS_DEADLINE = Duration.ofMinutes(31);
 
     private static final Logger LOG = Logger.getLogger(BuildService.class);
 
@@ -257,7 +257,7 @@ public class BuildService {
                 int cellTimeout = policy.resolveCellTimeoutMinutes(record.getBuildSpec().timeoutMinutes());
                 // Leave one minute for artifact/status publication before Lambda's fixed 1,800-second
                 // deadline. Fargate and MicroVM preserve their independently configured budgets.
-                if (launcher instanceof ClassicLambdaCellLauncher) {
+                if (launcher instanceof LambdaEventFunctionCellLauncher) {
                     cellTimeout = Math.min(cellTimeout, 29);
                 }
                 staging.materializeCell(record.getOwnerKey(), record.getBuildId(), buildKind,
@@ -353,7 +353,7 @@ public class BuildService {
                     config.stagingBucket());
         }
         if ("lambda".equals(preference)) {
-            return classicLambdaLauncher();
+            return lambdaEventFunctionLauncher();
         }
         // auto: unchanged from before backendPreference existed.
         if (architecture == Architecture.ARM64) {
@@ -380,13 +380,13 @@ public class BuildService {
                 microVm.vpcEgressConnectorArn().orElse(null), config.ecs().logGroupName());
     }
 
-    /** Standard Lambda workers are architecture-specific deployed functions and always use
+    /** Lambda Event Function workers are architecture-specific deployed functions and always use
      * direct S3 I/O. This constructor is shared by launch, poll and cooperative cancellation. */
-    private ClassicLambdaCellLauncher classicLambdaLauncher() {
-        var classic = config.classicLambda();
-        return new ClassicLambdaCellLauncher(lambda, s3Client,
-                new ClassicLambdaSettings(classic.x86_64FunctionArn().orElse("unused"),
-                        classic.arm64FunctionArn().orElse("unused")),
+    private LambdaEventFunctionCellLauncher lambdaEventFunctionLauncher() {
+        var eventFunction = config.lambdaEventFunction();
+        return new LambdaEventFunctionCellLauncher(lambda, s3Client,
+                new LambdaEventFunctionSettings(eventFunction.x86_64FunctionArn().orElse("unused"),
+                        eventFunction.arm64FunctionArn().orElse("unused")),
                 config.stagingBucket());
     }
 
@@ -401,7 +401,7 @@ public class BuildService {
             cell.setBackend("MICROVM");
             cell.setMicrovmId(h.microvmId());
             cell.setMicrovmEndpoint(h.endpoint());
-        } else if (handle instanceof CellHandle.ClassicLambdaHandle h) {
+        } else if (handle instanceof CellHandle.LambdaEventFunctionHandle h) {
             cell.setBackend("LAMBDA");
             cell.setLambdaFunctionArn(h.functionArn());
             cell.setLambdaRequestId(h.requestId());
@@ -450,14 +450,14 @@ public class BuildService {
                 continue;
             }
             CellHandle handle = cellHandleOf(cell).get();
-            if (handle instanceof CellHandle.ClassicLambdaHandle h) {
-                handle = new CellHandle.ClassicLambdaHandle(h.functionArn(), h.requestId(),
+            if (handle instanceof CellHandle.LambdaEventFunctionHandle h) {
+                handle = new CellHandle.LambdaEventFunctionHandle(h.functionArn(), h.requestId(),
                         stagingPathFor(record, cell));
             }
             CellLauncher launcher = handle instanceof CellHandle.MicroVmHandle
                     ? microVmLauncherFor(record)
-                    : handle instanceof CellHandle.ClassicLambdaHandle
-                            ? classicLambdaLauncher() : fargateLauncher;
+                    : handle instanceof CellHandle.LambdaEventFunctionHandle
+                            ? lambdaEventFunctionLauncher() : fargateLauncher;
             try {
                 launcher.stop(handle, reason);
             } catch (RuntimeException e) {
@@ -489,7 +489,7 @@ public class BuildService {
         }
         if ("LAMBDA".equals(cell.getBackend())) {
             return cell.getLambdaFunctionArn() == null ? Optional.empty()
-                    : Optional.of(new CellHandle.ClassicLambdaHandle(cell.getLambdaFunctionArn(),
+                    : Optional.of(new CellHandle.LambdaEventFunctionHandle(cell.getLambdaFunctionArn(),
                             cell.getLambdaRequestId(), null));
         }
         return cell.getTaskArn() == null ? Optional.empty()
@@ -555,7 +555,7 @@ public class BuildService {
     public BuildRecord refreshCellStates(BuildRecord record) {
         List<BuildRecord.CellRecord> fargateCells = new ArrayList<>();
         List<BuildRecord.CellRecord> microVmCells = new ArrayList<>();
-        List<BuildRecord.CellRecord> classicLambdaCells = new ArrayList<>();
+        List<BuildRecord.CellRecord> lambdaEventFunctionCells = new ArrayList<>();
         for (BuildRecord.CellRecord cell : record.getCells()) {
             if (cell.getState().isTerminal()) {
                 continue;
@@ -566,13 +566,13 @@ public class BuildService {
                 }
             } else if ("LAMBDA".equals(cell.getBackend())) {
                 if (cell.getLambdaFunctionArn() != null) {
-                    classicLambdaCells.add(cell);
+                    lambdaEventFunctionCells.add(cell);
                 }
             } else if (cell.getTaskArn() != null) {
                 fargateCells.add(cell);
             }
         }
-        if (fargateCells.isEmpty() && microVmCells.isEmpty() && classicLambdaCells.isEmpty()) {
+        if (fargateCells.isEmpty() && microVmCells.isEmpty() && lambdaEventFunctionCells.isEmpty()) {
             return record;
         }
 
@@ -600,15 +600,15 @@ public class BuildService {
             }
         }
 
-        if (!classicLambdaCells.isEmpty()) {
-            ClassicLambdaCellLauncher classicLambdaLauncher = classicLambdaLauncher();
-            for (BuildRecord.CellRecord cell : classicLambdaCells) {
-                CellHandle handle = new CellHandle.ClassicLambdaHandle(cell.getLambdaFunctionArn(),
+        if (!lambdaEventFunctionCells.isEmpty()) {
+            LambdaEventFunctionCellLauncher lambdaEventFunctionLauncher = lambdaEventFunctionLauncher();
+            for (BuildRecord.CellRecord cell : lambdaEventFunctionCells) {
+                CellHandle handle = new CellHandle.LambdaEventFunctionHandle(cell.getLambdaFunctionArn(),
                         cell.getLambdaRequestId(), stagingPathFor(record, cell));
-                CellPollResult result = classicLambdaLauncher.poll(handle);
+                CellPollResult result = lambdaEventFunctionLauncher.poll(handle);
                 if (result.state() == ai.codriverlabs.scaleoutbuild.ecs.CellLaunchState.RUNNING
-                        && classicLambdaStatusDeadlineExceeded(record)) {
-                    result = CellPollResult.failed(null, "standard Lambda did not write status.json within "
+                        && lambdaEventFunctionStatusDeadlineExceeded(record)) {
+                    result = CellPollResult.failed(null, "Lambda Event Function did not write status.json within "
                             + "its 30-minute execution budget plus one-minute delivery margin");
                 }
                 changed |= applyPollResult(record, cell, result);
@@ -635,9 +635,9 @@ public class BuildService {
         return staging.stagingPath(record.getOwnerKey(), record.getBuildId(), buildKind, architecture);
     }
 
-    private boolean classicLambdaStatusDeadlineExceeded(BuildRecord record) {
+    private boolean lambdaEventFunctionStatusDeadlineExceeded(BuildRecord record) {
         return record.getStartedAt() != null
-                && !Instant.now().isBefore(record.getStartedAt().plus(CLASSIC_LAMBDA_STATUS_DEADLINE));
+                && !Instant.now().isBefore(record.getStartedAt().plus(LAMBDA_EVENT_FUNCTION_STATUS_DEADLINE));
     }
 
     /**

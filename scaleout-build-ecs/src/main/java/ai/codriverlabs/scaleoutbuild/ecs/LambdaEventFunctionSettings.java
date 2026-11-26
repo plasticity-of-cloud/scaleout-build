@@ -11,8 +11,8 @@ import java.util.Objects;
  * Lambda functions have a fixed architecture, so a mixed build matrix needs one function per
  * architecture; callers never supply these ARNs.
  */
-public record ClassicLambdaSettings(String x86_64FunctionArn, String arm64FunctionArn) {
-    public ClassicLambdaSettings {
+public record LambdaEventFunctionSettings(String x86_64FunctionArn, String arm64FunctionArn) {
+    public LambdaEventFunctionSettings {
         requireNonBlank(x86_64FunctionArn, "x86_64FunctionArn");
         requireNonBlank(arm64FunctionArn, "arm64FunctionArn");
     }

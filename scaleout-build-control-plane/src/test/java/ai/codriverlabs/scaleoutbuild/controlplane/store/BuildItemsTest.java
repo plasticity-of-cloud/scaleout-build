@@ -147,7 +147,7 @@ class BuildItemsTest {
     }
 
     @Test
-    void toItem_roundTripsClassicLambdaHandleWithoutChangingLegacyFields() {
+    void toItem_roundTripsLambdaEventFunctionHandleWithoutChangingLegacyFields() {
         BuildRecord record = minimalRecord();
         BuildRecord.CellRecord cell = new BuildRecord.CellRecord();
         cell.setCell("NATIVE-ARM64");
@@ -162,7 +162,7 @@ class BuildItemsTest {
         assertThat(restored.getBackend()).isEqualTo("LAMBDA");
         assertThat(restored.getLambdaFunctionArn()).endsWith("worker-arm");
         assertThat(restored.getLambdaRequestId()).isEqualTo("request-123");
-        // Lambdas are intentionally absent from reaper task/MicroVM handle sets: standard Lambda
+        // Lambda Event Function invocations are intentionally absent from reaper task/MicroVM handle sets: Lambda Event Functions
         // offers no per-invocation stop operation.
         assertThat(BuildItems.toItem(record, mapper)).doesNotContainKeys(BuildItems.ATTR_TASK_ARNS,
                 BuildItems.ATTR_MICROVM_IDS);

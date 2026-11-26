@@ -1,4 +1,4 @@
-# Regular AWS Lambda container image for the asynchronous build worker.
+# AWS Lambda Event Function container image for the asynchronous build worker.
 #
 # This retains the Mandrel builder base because the worker runs native-image itself. A managed Java
 # Lambda base image would provide the Runtime API but not native-image. The Runtime Interface Client

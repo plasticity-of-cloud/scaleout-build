@@ -32,9 +32,9 @@ mvn -q compile
 for mode in jvm native; do
     extra=()
     [[ "$mode" == native ]] && extra=(-c nativeArch=x86)
-    # The JVM pass also exercises the optional standard-Lambda worker functions. They are image
+    # The JVM pass also exercises the optional Lambda Event Function worker functions. They are image
     # references, so synth needs no registry access or deployed image to validate their template.
-    [[ "$mode" == jvm ]] && extra+=( -c classicLambdaEnabled=true )
+    [[ "$mode" == jvm ]] && extra+=( -c lambdaEventFunctionEnabled=true )
     echo "==> synth runtimeMode=${mode}"
     npx cdk synth -c "runtimeMode=${mode}" "${extra[@]}" -c development=true --json \
         > "/tmp/scaleout-synth-${mode}.json"
@@ -110,18 +110,18 @@ for mode, want in {
                                 f"(has {providers or '<none>'})")
 
     if mode == "jvm":
-        # Explicitly exercise the optional classic Lambda data plane. Image package functions must
+        # Explicitly exercise the optional Lambda Event Function data plane. Image package functions must
         # remain private workers: no handler/runtime fields, fixed 30-minute timeout, fixed 10 GiB
         # memory and /tmp storage, and exactly one function for each CPU architecture.
         workers = [f for f in functions if f.get("PackageType") == "Image"]
         if len(workers) != 2:
-            failures.append(f"{mode}: expected 2 classic Lambda image workers, got {len(workers)}")
+            failures.append(f"{mode}: expected 2 Lambda Event Function image workers, got {len(workers)}")
         else:
             by_arch = {tuple(f.get("Architectures", [])): f for f in workers}
             for arch, tag in (("x86_64", "lambda-amd64"), ("arm64", "lambda-arm64")):
                 worker = by_arch.get((arch,))
                 if worker is None:
-                    failures.append(f"{mode}: missing classic Lambda {arch} worker")
+                    failures.append(f"{mode}: missing Lambda Event Function {arch} worker")
                     continue
                 check(mode, f"lambda.{arch}.memory", worker.get("MemorySize"), 10240)
                 check(mode, f"lambda.{arch}.timeout", worker.get("Timeout"), 1800)
@@ -132,7 +132,7 @@ for mode, want in {
         async_configs = [v["Properties"] for v in resources.values()
                          if v["Type"] == "AWS::Lambda::EventInvokeConfig"]
         if len(async_configs) != 2:
-            failures.append(f"{mode}: expected 2 classic Lambda async configurations, got {len(async_configs)}")
+            failures.append(f"{mode}: expected 2 Lambda Event Function async configurations, got {len(async_configs)}")
         else:
             for config in async_configs:
                 check(mode, "lambda.maximumEventAge", config.get("MaximumEventAgeInSeconds"), 60)

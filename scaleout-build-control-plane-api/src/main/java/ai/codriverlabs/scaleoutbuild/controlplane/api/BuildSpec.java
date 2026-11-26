@@ -66,9 +66,9 @@ import java.util.List;
  *                              (force every cell in this build onto Fargate, including
  *                              {@code arm64} ones, regardless of the deployment's own default), or
  *                              {@code microvm} (force {@code arm64} cells onto Lambda MicroVM), or
- *                              {@code lambda} (force architecture-matched standard Lambda workers).
+ *                              {@code lambda} (force architecture-matched Lambda Event Function workers).
  *                              Lambda is asynchronous and uses durable S3 status reporting; it has
- *                              a 15-minute maximum invocation timeout and no per-invocation hard
+ *                              a 30-minute maximum invocation timeout and no per-invocation hard
  *                              cancellation API. An explicit Lambda request is rejected when its
  *                              direct-S3 worker functions are not enabled for every requested
  *                              architecture. Case-insensitive; blank or {@code null} means

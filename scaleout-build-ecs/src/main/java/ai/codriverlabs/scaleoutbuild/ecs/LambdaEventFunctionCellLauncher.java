@@ -80,7 +80,9 @@ public final class LambdaEventFunctionCellLauncher implements CellLauncher {
             byte[] bytes = s3Client.getObjectAsBytes(b -> b.bucket(stagingBucket).key(key)).asByteArray();
             StatusReport report = mapper.readValue(bytes, StatusReport.class);
             return "SUCCEEDED".equals(report.state())
-                    ? CellPollResult.succeeded(report.exitCode())
+                    ? CellPollResult.succeeded(report.exitCode(), report.attemptId(),
+                            report.artifacts().stream().map(ArtifactReport::key)
+                                    .filter(Objects::nonNull).toList())
                     : CellPollResult.failed(report.exitCode(), "Lambda build reported failure (exitCode="
                             + report.exitCode() + ")");
         } catch (NoSuchKeyException e) {
@@ -134,6 +136,13 @@ public final class LambdaEventFunctionCellLauncher implements CellLauncher {
 
     /** The status wire shape written by AgentLambdaHandler and AgentHookServer. */
     public record StatusReport(String buildId, String cell, String state, int exitCode,
-                               List<Map<String, Object>> artifacts, String completedAt) {
+                               List<ArtifactReport> artifacts, String completedAt, String attemptId) {
+        public StatusReport {
+            artifacts = artifacts == null ? List.of() : List.copyOf(artifacts);
+        }
+    }
+
+    /** One immutable attempt artifact selected by the canonical status manifest. */
+    public record ArtifactReport(String path, String key, String sha256, long sizeBytes) {
     }
 }

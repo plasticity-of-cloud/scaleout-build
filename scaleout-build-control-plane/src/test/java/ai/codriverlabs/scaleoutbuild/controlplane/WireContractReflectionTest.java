@@ -6,6 +6,7 @@ package ai.codriverlabs.scaleoutbuild.controlplane;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import ai.codriverlabs.scaleoutbuild.controlplane.api.ErrorResponse;
+import ai.codriverlabs.scaleoutbuild.ecs.LambdaEventFunctionCellLauncher;
 import ai.codriverlabs.scaleoutbuild.ecs.MicroVmCellLauncher;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 import java.io.IOException;
@@ -101,12 +102,11 @@ class WireContractReflectionTest {
                 .collect(Collectors.toSet());
 
         assertThat(registered)
-                .as("MicroVmCellLauncher.StatusReport must stay registered in "
-                        + "MicrovmReflectionConfig -- removing it silently reintroduces the "
-                        + "exact native-image deserialization failure found in production: a "
-                        + "valid status.json that readStatusReport() can never parse, so the "
-                        + "control plane never learns a MicroVM cell actually succeeded.")
-                .contains(MicroVmCellLauncher.StatusReport.class.getName());
+                .as("Backend status reports read by plain ObjectMapper calls must stay registered "
+                        + "for native-image reflection")
+                .contains(MicroVmCellLauncher.StatusReport.class.getName(),
+                        LambdaEventFunctionCellLauncher.StatusReport.class.getName(),
+                        LambdaEventFunctionCellLauncher.ArtifactReport.class.getName());
     }
 
     /** Top-level type names in the API package, read from wherever the artifact actually is. */

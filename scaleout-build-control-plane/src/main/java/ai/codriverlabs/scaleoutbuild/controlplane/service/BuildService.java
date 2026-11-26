@@ -62,8 +62,8 @@ public class BuildService {
      * entrypoint wrapper. {@code AgentMain} never exits with it, so it is unambiguous.
      */
     private static final int CONTAINER_TIMEOUT_EXIT_CODE = 124;
-    /** On-demand Lambda Event Functions are limited to 1,800s; async delivery is capped to 60s by CDK. */
-    private static final Duration LAMBDA_EVENT_FUNCTION_STATUS_DEADLINE = Duration.ofMinutes(31);
+    /** Event age (65m) plus the final 30m invocation and a five-minute control-plane margin. */
+    private static final Duration LAMBDA_EVENT_FUNCTION_STATUS_DEADLINE = Duration.ofMinutes(100);
 
     private static final Logger LOG = Logger.getLogger(BuildService.class);
 
@@ -513,23 +513,29 @@ public class BuildService {
                     BuildKind buildKind = BuildKind.parse(cell.getCell().split("/")[0]);
                     Architecture architecture = Architecture.parse(cell.getCell().split("/")[1]);
                     String prefix = staging.outputPrefix(record.getOwnerKey(), record.getBuildId(), buildKind, architecture);
-                    /*
-                     * Listed from S3 rather than read from the build record. The record only knows an
-                     * artifact name when the client supplied imageName, which a framework-generated
-                     * argfile never does -- it names its own output. Listing also reports what was
-                     * actually uploaded rather than what was expected, which is the more useful answer
-                     * either way. Falls back to the record if the listing is empty, so a transient S3
-                     * read does not silently report a successful build as artifact-less.
-                     */
-                    List<String> names = staging.listOutputNames(record.getOwnerKey(),
-                            record.getBuildId(), buildKind, architecture);
-                    if (names.isEmpty()) {
-                        names = cell.getArtifactPaths();
-                    }
-                    for (String artifact : names) {
-                        String key = prefix.endsWith("/") ? prefix + artifact : prefix + "/" + artifact;
-                        UploadTarget target = staging.presignDownload(key, null);
-                        downloads.add(new ArtifactDownload(artifact, target.url(), target.expiresAt()));
+                    if (!cell.getLambdaArtifactKeys().isEmpty()) {
+                        for (String key : cell.getLambdaArtifactKeys()) {
+                            String artifact = key.substring(key.lastIndexOf('/') + 1);
+                            UploadTarget target = staging.presignDownload(key, null);
+                            downloads.add(new ArtifactDownload(artifact, target.url(), target.expiresAt()));
+                        }
+                    } else {
+                        /*
+                         * Listed from S3 rather than read from the build record. The record only knows an
+                         * artifact name when the client supplied imageName, which a framework-generated
+                         * argfile never does -- it names its own output. Old Event Function records and
+                         * the Fargate/MicroVM paths retain this canonical-prefix behavior.
+                         */
+                        List<String> names = staging.listOutputNames(record.getOwnerKey(),
+                                record.getBuildId(), buildKind, architecture);
+                        if (names.isEmpty()) {
+                            names = cell.getArtifactPaths();
+                        }
+                        for (String artifact : names) {
+                            String key = prefix.endsWith("/") ? prefix + artifact : prefix + "/" + artifact;
+                            UploadTarget target = staging.presignDownload(key, null);
+                            downloads.add(new ArtifactDownload(artifact, target.url(), target.expiresAt()));
+                        }
                     }
                 }
                 cells.add(new ArtifactListResponse.CellArtifacts(cell.getCell(), downloads));
@@ -608,8 +614,12 @@ public class BuildService {
                 CellPollResult result = lambdaEventFunctionLauncher.poll(handle);
                 if (result.state() == ai.codriverlabs.scaleoutbuild.ecs.CellLaunchState.RUNNING
                         && lambdaEventFunctionStatusDeadlineExceeded(record)) {
-                    result = CellPollResult.failed(null, "Lambda Event Function did not write status.json within "
-                            + "its 30-minute execution budget plus one-minute delivery margin");
+                    // Prevent a queued or still-running redrive from publishing after this cell is
+                    // made terminal. The worker observes the marker cooperatively.
+                    lambdaEventFunctionLauncher.stop(handle,
+                            "Event Function attempts exceeded the control-plane deadline");
+                    result = CellPollResult.failed(null, "Lambda Event Function did not write status.json after "
+                            + "its initial attempt and one bounded redrive");
                 }
                 changed |= applyPollResult(record, cell, result);
             }
@@ -656,6 +666,10 @@ public class BuildService {
             case SUCCEEDED -> {
                 cell.setExitCode(result.exitCode());
                 cell.setState(CellState.SUCCEEDED);
+                if (result.attemptId() != null) {
+                    cell.setLambdaAttemptId(result.attemptId());
+                    cell.setLambdaArtifactKeys(result.artifactKeys());
+                }
                 /*
                  * imageName is absent for a pass-through build; see the identical comment at the
                  * other call site in start() for why List.of(null) must never be attempted here.

@@ -135,8 +135,8 @@ for mode, want in {
             failures.append(f"{mode}: expected 2 Lambda Event Function async configurations, got {len(async_configs)}")
         else:
             for config in async_configs:
-                check(mode, "lambda.maximumEventAge", config.get("MaximumEventAgeInSeconds"), 60)
-                check(mode, "lambda.maximumRetryAttempts", config.get("MaximumRetryAttempts"), 0)
+                check(mode, "lambda.maximumEventAge", config.get("MaximumEventAgeInSeconds"), 3900)
+                check(mode, "lambda.maximumRetryAttempts", config.get("MaximumRetryAttempts"), 1)
 
     urls = [v["Properties"] for v in resources.values() if v["Type"] == "AWS::Lambda::Url"]
     if len(urls) != 1:

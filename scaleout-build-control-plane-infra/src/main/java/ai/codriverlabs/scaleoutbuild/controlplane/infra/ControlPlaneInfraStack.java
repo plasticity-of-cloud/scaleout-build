@@ -305,17 +305,17 @@ public class ControlPlaneInfraStack extends Stack {
                     .timeout(1800)
                     .ephemeralStorage(CfnFunction.EphemeralStorageProperty.builder().size(10240).build())
                     .build();
-            // A Lambda service retry can start a duplicate native-image compile against the same
-            // canonical S3 output prefix. The worker also takes a conditional S3 claim, and the
-            // event policy prevents ordinary failure retries while bounding queue delay to 60s.
+            // One bounded retry permits a fresh attempt to take over after a hard timeout. The
+            // renewable S3 lease fences duplicates while an attempt is live, and 3,900 seconds
+            // leaves enough event age for a second 30-minute invocation plus queue margin.
             for (CfnFunction worker : List.of(lambdaEventFunctionX86Worker, lambdaEventFunctionArmWorker)) {
                 CfnEventInvokeConfig.Builder.create(this,
                                 worker == lambdaEventFunctionX86Worker ? "ClassicLambdaX86AsyncConfig"
                                         : "ClassicLambdaArmAsyncConfig")
                         .functionName(worker.getRef())
                         .qualifier("$LATEST")
-                        .maximumEventAgeInSeconds(60)
-                        .maximumRetryAttempts(0)
+                        .maximumEventAgeInSeconds(3900)
+                        .maximumRetryAttempts(1)
                         .build();
             }
             agentRepository.grantPull(new ServicePrincipal("lambda.amazonaws.com"));

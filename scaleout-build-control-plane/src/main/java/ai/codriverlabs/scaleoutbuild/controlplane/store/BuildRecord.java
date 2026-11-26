@@ -69,6 +69,10 @@ public final class BuildRecord {
         private String lambdaFunctionArn;
         /** AWS request id returned when the asynchronous invoke was accepted; diagnostic only. */
         private String lambdaRequestId;
+        /** Winning Event Function attempt selected by the canonical status manifest. */
+        private String lambdaAttemptId;
+        /** Immutable S3 object keys published by the winning Event Function attempt. */
+        private List<String> lambdaArtifactKeys = new ArrayList<>();
 
         public String getCell() {
             return cell;
@@ -141,6 +145,23 @@ public final class BuildRecord {
 
         public void setLambdaRequestId(String lambdaRequestId) {
             this.lambdaRequestId = lambdaRequestId;
+        }
+
+        public String getLambdaAttemptId() {
+            return lambdaAttemptId;
+        }
+
+        public void setLambdaAttemptId(String lambdaAttemptId) {
+            this.lambdaAttemptId = lambdaAttemptId;
+        }
+
+        public List<String> getLambdaArtifactKeys() {
+            return lambdaArtifactKeys;
+        }
+
+        public void setLambdaArtifactKeys(List<String> lambdaArtifactKeys) {
+            this.lambdaArtifactKeys = lambdaArtifactKeys == null ? new ArrayList<>()
+                    : new ArrayList<>(lambdaArtifactKeys);
         }
 
         public Integer getExitCode() {

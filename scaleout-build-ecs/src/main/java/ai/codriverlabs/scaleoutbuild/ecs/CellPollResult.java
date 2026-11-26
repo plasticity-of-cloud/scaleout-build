@@ -24,22 +24,34 @@ package ai.codriverlabs.scaleoutbuild.ecs;
  * @param exitCode      the process exit code, if known and the cell reached a terminal state;
  *                      {@code null} otherwise
  * @param failureReason human-readable reason, set only when {@code state == FAILED}
+ * @param attemptId      winning backend attempt identifier, when the backend reports one
+ * @param artifactKeys   immutable artifact object keys selected by the winning attempt
  */
-public record CellPollResult(CellLaunchState state, Integer exitCode, String failureReason) {
+public record CellPollResult(CellLaunchState state, Integer exitCode, String failureReason,
+                             String attemptId, java.util.List<String> artifactKeys) {
+
+    public CellPollResult {
+        artifactKeys = artifactKeys == null ? java.util.List.of() : java.util.List.copyOf(artifactKeys);
+    }
 
     public static CellPollResult provisioning() {
-        return new CellPollResult(CellLaunchState.PROVISIONING, null, null);
+        return new CellPollResult(CellLaunchState.PROVISIONING, null, null, null, java.util.List.of());
     }
 
     public static CellPollResult running() {
-        return new CellPollResult(CellLaunchState.RUNNING, null, null);
+        return new CellPollResult(CellLaunchState.RUNNING, null, null, null, java.util.List.of());
     }
 
     public static CellPollResult succeeded(int exitCode) {
-        return new CellPollResult(CellLaunchState.SUCCEEDED, exitCode, null);
+        return succeeded(exitCode, null, java.util.List.of());
+    }
+
+    public static CellPollResult succeeded(int exitCode, String attemptId,
+                                           java.util.List<String> artifactKeys) {
+        return new CellPollResult(CellLaunchState.SUCCEEDED, exitCode, null, attemptId, artifactKeys);
     }
 
     public static CellPollResult failed(Integer exitCode, String reason) {
-        return new CellPollResult(CellLaunchState.FAILED, exitCode, reason);
+        return new CellPollResult(CellLaunchState.FAILED, exitCode, reason, null, java.util.List.of());
     }
 }

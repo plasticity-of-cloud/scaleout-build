@@ -3,6 +3,7 @@
  */
 package ai.codriverlabs.scaleoutbuild.controlplane;
 
+import ai.codriverlabs.scaleoutbuild.ecs.LambdaEventFunctionCellLauncher;
 import ai.codriverlabs.scaleoutbuild.ecs.MicroVmCellLauncher;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 
@@ -47,6 +48,8 @@ import io.quarkus.runtime.annotations.RegisterForReflection;
  */
 @RegisterForReflection(targets = {
     MicroVmCellLauncher.StatusReport.class,
+    LambdaEventFunctionCellLauncher.StatusReport.class,
+    LambdaEventFunctionCellLauncher.ArtifactReport.class,
 })
 public final class MicrovmReflectionConfig {
 

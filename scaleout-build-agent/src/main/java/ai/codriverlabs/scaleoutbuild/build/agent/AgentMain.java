@@ -48,6 +48,7 @@ public final class AgentMain {
 
     static final int EXIT_SUCCESS = 0;
     static final int EXIT_BUILD_FAILED = 1;
+    static final int EXIT_CANCELLED = 130;
     static final int EXIT_CONFIGURATION_ERROR = 78; // EX_CONFIG
 
     private AgentMain() {
@@ -101,6 +102,18 @@ public final class AgentMain {
      * @return process exit code
      */
     public static int runWithDirectS3Io(AgentConfig config, BuildLog buildLog, S3Client s3Client) {
+        return runWithDirectS3Io(config, buildLog, s3Client,
+                ai.codriverlabs.scaleoutbuild.build.BuildCancellationProbe.NEVER,
+                joinKey(config.stagingRelativePath(), StagingLayout.OUTPUT_DIR_NAME));
+    }
+
+    /**
+     * Event Function variant with cooperative cancellation and an attempt-scoped S3 output prefix.
+     * Existing callers use the overload above and retain the canonical output location.
+     */
+    static int runWithDirectS3Io(AgentConfig config, BuildLog buildLog, S3Client s3Client,
+                                 ai.codriverlabs.scaleoutbuild.build.BuildCancellationProbe cancellationProbe,
+                                 String outputKeyPrefix) {
         S3Io s3Io = new S3Io(s3Client, config.s3Bucket());
         // A synthetic local "mount root": BuildEnvironment.resolveStagingRoot() resolves
         // stagingRelativePath against whatever root it's given, so downloading straight into
@@ -112,6 +125,9 @@ public final class AgentMain {
                 config.tempDirectory().resolve("s3-staging").resolve(config.buildId());
         Path localStagingDir = localMountRoot.resolve(config.stagingRelativePath());
         try {
+            if (cancellationProbe.isCancellationRequested()) {
+                return EXIT_CANCELLED;
+            }
             s3Io.downloadStagingDirectory(config.stagingRelativePath(), localStagingDir);
 
             BuildEnvironment environment = BuildEnvironment.builder(localMountRoot)
@@ -122,9 +138,13 @@ public final class AgentMain {
             // inputs that were downloaded moments earlier. Truncated to seconds because some filesystems
             // store mtime at that granularity, and a too-precise floor would exclude real output.
             Instant buildStartedAt = Instant.now().truncatedTo(ChronoUnit.SECONDS);
-            int exitCode = runAgainst(config, buildLog, environment);
+            int exitCode = runAgainst(config, buildLog, environment, cancellationProbe);
 
             if (exitCode == EXIT_SUCCESS) {
+                if (cancellationProbe.isCancellationRequested()) {
+                    LOG.info("Build {} was cancelled before artifact publication", config.buildId());
+                    return EXIT_CANCELLED;
+                }
                 Path localOutputDir = localStagingDir.resolve(StagingLayout.OUTPUT_DIR_NAME);
                 /*
                  * Gather artifacts into output/ before uploading, because a pass-through argfile does not
@@ -142,8 +162,6 @@ public final class AgentMain {
                  * layout both sides agree on.
                  */
                 collectStrayArtifactsInto(localStagingDir, localOutputDir, config, buildStartedAt);
-                String outputKeyPrefix = joinKey(config.stagingRelativePath(),
-                        StagingLayout.OUTPUT_DIR_NAME);
                 s3Io.uploadOutputDirectory(localOutputDir, outputKeyPrefix);
             } else {
                 LOG.info("Build did not succeed (exit {}); skipping artifact upload. The agent's own "
@@ -161,8 +179,15 @@ public final class AgentMain {
     }
 
     private static int runAgainst(AgentConfig config, BuildLog buildLog,
-                                   BuildEnvironment environment) {
-        BuildExecutor executor = new NativeImageBuildExecutor(environment);
+                                  BuildEnvironment environment) {
+        return runAgainst(config, buildLog, environment,
+                ai.codriverlabs.scaleoutbuild.build.BuildCancellationProbe.NEVER);
+    }
+
+    private static int runAgainst(AgentConfig config, BuildLog buildLog,
+                                  BuildEnvironment environment,
+                                  ai.codriverlabs.scaleoutbuild.build.BuildCancellationProbe cancellationProbe) {
+        BuildExecutor executor = new NativeImageBuildExecutor(environment, cancellationProbe);
 
         BuildCellRequest request = BuildCellRequest.builder()
                 .buildId(config.buildId())
@@ -182,6 +207,9 @@ public final class AgentMain {
                     config.buildKind(), config.buildId(), config.architecture(), result.duration(),
                     result.artifacts());
             return EXIT_SUCCESS;
+        } catch (ai.codriverlabs.scaleoutbuild.build.BuildCancelledException e) {
+            LOG.info("Build {} cancelled: {}", config.buildId(), e.getMessage());
+            return EXIT_CANCELLED;
         } catch (BuildFailedException e) {
             LOG.error("Build {} failed: {}", config.buildId(), e.getMessage(), e);
             return EXIT_BUILD_FAILED;

@@ -40,55 +40,68 @@ public final class AgentLambdaHandler implements RequestStreamHandler {
 
         LOG.info("Starting build agent (Lambda Event Function event) with {}", config);
         try (S3Client s3 = S3Client.create()) {
-            if (cancelled(s3, config)) {
-                LOG.info("Skipping cancelled Lambda build {}", config.buildId());
+            if (statusExists(s3, config)) {
+                LOG.info("Skipping delivery for completed Lambda build {}", config.buildId());
                 return;
             }
-            if (!claim(s3, config)) {
-                LOG.info("Skipping duplicate Lambda delivery for build {}", config.buildId());
+            var acquired = acquireLeaseWithShortWait(s3, config);
+            if (acquired.isEmpty()) {
+                LOG.info("Skipping duplicate Lambda delivery for build {}; another attempt owns the lease",
+                        config.buildId());
                 return;
             }
+            EventFunctionAttemptLease lease = acquired.get();
+            String outputPrefix = lease.outputPrefix(config.stagingRelativePath());
             int exitCode = AgentMain.runWithDirectS3Io(config,
-                    ai.codriverlabs.scaleoutbuild.build.BuildLog.defaultLog(), s3);
-            // Reuse the exact status wire writer used by the MicroVM hook server. This avoids
-            // backend-specific result schemas and keeps LambdaEventFunctionCellLauncher's S3 polling
-            // compatible with existing artifact/status tooling.
-            new AgentHookServer(s3).writeStatusJson(config, exitCode);
-            output.write(("{\"buildId\":\"" + config.buildId() + "\",\"exitCode\":" + exitCode
-                    + "}").getBytes(StandardCharsets.UTF_8));
-        } catch (RuntimeException e) {
-            throw new IOException("Failed to write Lambda build status for " + config.buildId(), e);
-        }
-    }
-
-    private static boolean cancelled(S3Client s3, AgentConfig config) {
-        try {
-            s3.headObject(b -> b.bucket(config.s3Bucket())
-                    .key(joinKey(config.stagingRelativePath(), "cancelled")));
-            return true;
-        } catch (S3Exception e) {
-            if (e.statusCode() == 404) {
-                return false;
+                    ai.codriverlabs.scaleoutbuild.build.BuildLog.defaultLog(), s3, lease, outputPrefix);
+            if (exitCode == AgentMain.EXIT_CANCELLED || lease.isCancellationRequested()) {
+                LOG.info("Attempt {} stopped before canonical publication", lease.attemptId());
+                return;
             }
-            throw e;
+            // status.json is the conditional commit point. Artifacts remain immutable under the
+            // winning attempt prefix, so an expired stale worker cannot overwrite them.
+            boolean committed = new AgentHookServer(s3).writeStatusJson(config, exitCode,
+                    outputPrefix, lease.attemptId(), true, lease::fenceForCommit);
+            LOG.info("Attempt {} canonical status committed={}", lease.attemptId(), committed);
+            output.write(("{\"buildId\":\"" + config.buildId() + "\",\"attemptId\":\""
+                    + lease.attemptId() + "\",\"exitCode\":" + exitCode + "}")
+                    .getBytes(StandardCharsets.UTF_8));
+        } catch (RuntimeException e) {
+            throw new IOException("Failed to run Lambda build for " + config.buildId(), e);
         }
     }
 
     /**
-     * Claims canonical output publication before compilation. Async Lambda delivery is at-least-once;
-     * a conditional S3 create ensures only the first accepted delivery can write the cell's shared
-     * output and status paths. Event retries are disabled in the infrastructure, so a failed first
-     * attempt is reported by the control-plane deadline rather than a second worker racing it.
+     * A retry that arrives during the previous attempt's final lease window waits briefly instead
+     * of consuming the only redrive. If the owner crashed, this invocation can take over after the
+     * 30-second lease expires; a genuine concurrent duplicate still exits after the bounded wait.
      */
-    private static boolean claim(S3Client s3, AgentConfig config) {
+    private static java.util.Optional<EventFunctionAttemptLease> acquireLeaseWithShortWait(
+            S3Client s3, AgentConfig config) throws IOException {
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(40);
+        do {
+            var lease = EventFunctionAttemptLease.acquire(s3, config.s3Bucket(),
+                    config.stagingRelativePath());
+            if (lease.isPresent() || statusExists(s3, config)) {
+                return lease;
+            }
+            try {
+                Thread.sleep(2000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Interrupted while waiting for Event Function attempt lease", e);
+            }
+        } while (System.nanoTime() < deadline);
+        return java.util.Optional.empty();
+    }
+
+    private static boolean statusExists(S3Client s3, AgentConfig config) {
         try {
-            s3.putObject(b -> b.bucket(config.s3Bucket())
-                    .key(joinKey(config.stagingRelativePath(), "lambda-claim"))
-                    .ifNoneMatch("*"), software.amazon.awssdk.core.sync.RequestBody
-                    .fromBytes(new byte[0]));
+            s3.headObject(b -> b.bucket(config.s3Bucket())
+                    .key(joinKey(config.stagingRelativePath(), "status.json")));
             return true;
         } catch (S3Exception e) {
-            if (e.statusCode() == 412) {
+            if (e.statusCode() == 404) {
                 return false;
             }
             throw e;

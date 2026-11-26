@@ -33,9 +33,16 @@ public final class NativeImageBuildExecutor implements BuildExecutor {
     private static final Logger LOG = LoggerFactory.getLogger(NativeImageBuildExecutor.class);
 
     private final BuildEnvironment environment;
+    private final BuildCancellationProbe cancellationProbe;
 
     public NativeImageBuildExecutor(BuildEnvironment environment) {
+        this(environment, BuildCancellationProbe.NEVER);
+    }
+
+    public NativeImageBuildExecutor(BuildEnvironment environment,
+                                    BuildCancellationProbe cancellationProbe) {
         this.environment = Objects.requireNonNull(environment, "environment");
+        this.cancellationProbe = Objects.requireNonNull(cancellationProbe, "cancellationProbe");
     }
 
     @Override
@@ -81,10 +88,10 @@ public final class NativeImageBuildExecutor implements BuildExecutor {
             artifacts.forEach(artifact -> output.line("[scaleout-build] produced " + artifact));
             return new BuildResult(exitCode, duration, artifacts);
         } catch (InterruptedException e) {
-            // Typically a Fargate Spot interruption: stop the builder; the caller (BuildMojo's
-            // local-first path, or the agent's single-shot execution) decides what happens next.
-            LOG.warn("Build interrupted, terminating native-image process");
-            process.destroyForcibly();
+            // Typically a Fargate Spot interruption: stop the complete builder process tree; the
+            // caller decides what happens next.
+            LOG.warn("Build interrupted, terminating native-image process tree");
+            terminateProcessTree(process);
             throw e;
         } finally {
             pump.interrupt();
@@ -175,18 +182,61 @@ public final class NativeImageBuildExecutor implements BuildExecutor {
 
     private int awaitExit(Process process, int timeoutMinutes, List<String> command)
             throws InterruptedException, BuildFailedException {
-        if (timeoutMinutes <= 0) {
-            return process.waitFor();
+        long deadlineNanos = timeoutMinutes <= 0 ? Long.MAX_VALUE
+                : System.nanoTime() + TimeUnit.MINUTES.toNanos(timeoutMinutes);
+        while (true) {
+            if (process.waitFor(1, TimeUnit.SECONDS)) {
+                return process.exitValue();
+            }
+            boolean cancellationRequested;
+            try {
+                cancellationRequested = cancellationProbe.isCancellationRequested();
+            } catch (RuntimeException e) {
+                terminateProcessTree(process);
+                throw e;
+            }
+            if (cancellationRequested) {
+                terminateProcessTree(process);
+                throw new BuildCancelledException(
+                        "native-image was cancelled before artifact publication");
+            }
+            if (System.nanoTime() >= deadlineNanos) {
+                terminateProcessTree(process);
+                throw new BuildFailedException(
+                        "native-image exceeded the " + timeoutMinutes + " minute timeout. If this project"
+                                + " legitimately needs longer, raise it with"
+                                + " -Dscaleout-build.timeoutMinutes=<minutes>; the default comes from the control"
+                                + " plane's scaleout.ecs.default-cell-timeout-minutes. Command: "
+                                + String.join(" ", command));
+            }
         }
-        if (process.waitFor(timeoutMinutes, TimeUnit.MINUTES)) {
-            return process.exitValue();
+    }
+
+    /** Stops native-image and every child tool process, escalating after a bounded grace period. */
+    private void terminateProcessTree(Process process) {
+        List<ProcessHandle> descendants = new ArrayList<>(process.toHandle().descendants().toList());
+        java.util.Collections.reverse(descendants);
+        descendants.forEach(ProcessHandle::destroy);
+        process.destroy();
+        try {
+            process.waitFor(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
-        process.destroyForcibly();
-        throw new BuildFailedException(
-                "native-image exceeded the " + timeoutMinutes + " minute timeout. If this project"
-                        + " legitimately needs longer, raise it with"
-                        + " -Dscaleout-build.timeoutMinutes=<minutes>; the default comes from the control"
-                        + " plane's scaleout.ecs.default-cell-timeout-minutes. Command: "
-                        + String.join(" ", command));
+        // The root can exit while a child ignores TERM. Always inspect and forcibly stop every
+        // captured descendant rather than returning when only the root is gone.
+        descendants.stream().filter(ProcessHandle::isAlive).forEach(ProcessHandle::destroyForcibly);
+        if (process.isAlive()) {
+            process.destroyForcibly();
+        }
+        for (ProcessHandle descendant : descendants) {
+            if (descendant.isAlive()) {
+                try {
+                    descendant.onExit().get(5, TimeUnit.SECONDS);
+                } catch (Exception e) {
+                    LOG.debug("Process {} did not confirm exit: {}", descendant.pid(), e.getMessage());
+                }
+            }
+        }
     }
 }

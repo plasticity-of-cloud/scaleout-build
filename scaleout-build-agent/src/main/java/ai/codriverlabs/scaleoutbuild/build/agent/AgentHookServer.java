@@ -237,33 +237,58 @@ public final class AgentHookServer {
      * {@code MicroVmCellLauncher.poll()} reads this object from S3 instead.
      */
     void writeStatusJson(AgentConfig config, int exitCode) throws IOException {
+        String outputPrefix = joinKey(config.stagingRelativePath(), StagingLayout.OUTPUT_DIR_NAME);
+        writeStatusJson(config, exitCode, outputPrefix, null, false, () -> true);
+    }
+
+    /**
+     * Writes an Event Function attempt's canonical status manifest. Artifacts stay under the
+     * immutable attempt prefix; {@code status.json} is the conditional commit point selecting the
+     * winner. A stale attempt therefore cannot replace a result that another attempt committed.
+     *
+     * @return true when this invocation created the canonical status, false when one already exists
+     */
+    boolean writeStatusJson(AgentConfig config, int exitCode, String outputKeyPrefix,
+                            String attemptId, boolean onlyIfAbsent,
+                            java.util.function.BooleanSupplier commitFence) throws IOException {
         String cell = config.buildKind().configValue().toUpperCase(java.util.Locale.ROOT) + "/"
                 + config.architecture().name();
         String state = exitCode == AgentMain.EXIT_SUCCESS ? "SUCCEEDED" : "FAILED";
         List<ArtifactEntry> artifacts = state.equals("SUCCEEDED")
-                ? describeArtifacts(config)
+                ? describeArtifacts(config, outputKeyPrefix)
                 : List.of();
 
         StatusReport report = new StatusReport(config.buildId(), cell, state, exitCode, artifacts,
-                Instant.now().toString());
+                Instant.now().toString(), attemptId);
 
         byte[] json = STATUS_MAPPER.writeValueAsBytes(report);
+        // Artifact listing and hashing can take long enough for a lease to expire. Re-fence the
+        // attempt through a conditional lease update immediately before the canonical status put.
+        if (!commitFence.getAsBoolean()) {
+            return false;
+        }
         String key = joinKey(config.stagingRelativePath(), STATUS_FILE_NAME);
+        var request = software.amazon.awssdk.services.s3.model.PutObjectRequest.builder()
+                .bucket(config.s3Bucket())
+                .key(key)
+                .contentType("application/json");
+        if (onlyIfAbsent) {
+            request.ifNoneMatch("*");
+        }
         try {
-            s3Client.putObject(
-                    software.amazon.awssdk.services.s3.model.PutObjectRequest.builder()
-                            .bucket(config.s3Bucket())
-                            .key(key)
-                            .contentType("application/json")
-                            .build(),
+            s3Client.putObject(request.build(),
                     software.amazon.awssdk.core.sync.RequestBody.fromBytes(json));
-        } catch (software.amazon.awssdk.core.exception.SdkException e) {
+        } catch (software.amazon.awssdk.services.s3.model.S3Exception e) {
+            if (onlyIfAbsent && e.statusCode() == 412) {
+                return false;
+            }
             throw new IOException(
                     "Failed to upload " + STATUS_FILE_NAME + " to s3://" + config.s3Bucket() + "/"
                             + key, e);
         }
-        LOG.info("Wrote {} (state={}, exitCode={}) to s3://{}/{}", STATUS_FILE_NAME, state, exitCode,
-                config.s3Bucket(), key);
+        LOG.info("Wrote {} (state={}, exitCode={}, attempt={}) to s3://{}/{}", STATUS_FILE_NAME,
+                state, exitCode, attemptId, config.s3Bucket(), key);
+        return true;
     }
 
     /**
@@ -278,8 +303,7 @@ public final class AgentHookServer {
      * reads the digest from the object that was actually uploaded, not from a local file that may
      * no longer exist.
      */
-    private List<ArtifactEntry> describeArtifacts(AgentConfig config) {
-        String outputKeyPrefix = joinKey(config.stagingRelativePath(), StagingLayout.OUTPUT_DIR_NAME);
+    private List<ArtifactEntry> describeArtifacts(AgentConfig config, String outputKeyPrefix) {
         String normalizedPrefix = outputKeyPrefix.endsWith("/") ? outputKeyPrefix : outputKeyPrefix + "/";
         var response = s3Client.listObjectsV2(
                 software.amazon.awssdk.services.s3.model.ListObjectsV2Request.builder()
@@ -294,7 +318,7 @@ public final class AgentHookServer {
     private ArtifactEntry describeOne(String bucket, software.amazon.awssdk.services.s3.model.S3Object object) {
         String fileName = object.key().substring(object.key().lastIndexOf('/') + 1);
         String sha256 = streamingSha256(bucket, object.key());
-        return new ArtifactEntry(fileName, sha256, object.size());
+        return new ArtifactEntry(fileName, object.key(), sha256, object.size());
     }
 
     /** Hashes an S3 object by streaming its bytes through the digest, without buffering the whole
@@ -350,7 +374,7 @@ public final class AgentHookServer {
     }
 
     /** One artifact entry in {@code status.json}. */
-    record ArtifactEntry(String path, String sha256, long sizeBytes) {
+    record ArtifactEntry(String path, String key, String sha256, long sizeBytes) {
     }
 
     /**
@@ -369,6 +393,6 @@ public final class AgentHookServer {
      * exactly.
      */
     record StatusReport(String buildId, String cell, String state, int exitCode,
-                        List<ArtifactEntry> artifacts, String completedAt) {
+                        List<ArtifactEntry> artifacts, String completedAt, String attemptId) {
     }
 }

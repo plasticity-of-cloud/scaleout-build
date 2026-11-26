@@ -60,9 +60,9 @@ invocation, and keeps the cell provisioning until the worker writes `status.json
 reuses the normal agent JAR's direct-S3 build path. It uses a conditional S3 claim to prevent a
 duplicate asynchronous event delivery from publishing a second result.
 
-Cancellation writes a durable marker that prevents queued workers from starting. AWS Lambda cannot
-terminate an already-running named event invocation, so an in-progress `native-image` execution
-continues until it finishes or reaches the worker's 30-minute timeout.
+Cancellation writes a durable marker. AWS Lambda cannot terminate a named invocation directly,
+but the worker polls that marker, terminates the `native-image` process tree cooperatively, and
+skips publication. A renewable attempt lease also permits one bounded retry after a hard timeout.
 
 See [the Lambda Event Function backend design](../../design/control-plane/lambda-event-function-build-backend.md)
 for fixed resource sizing, timeout behavior, pricing trade-offs, and production constraints.

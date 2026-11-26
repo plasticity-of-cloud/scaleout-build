@@ -17,7 +17,7 @@ The service accepts an explicit Lambda request only when all requested architect
 - `scaleout.lambda-event-function.arm64-function-arn` for `arm64` cells
 - `scaleout.ecs.agent-uses-direct-s3-io=true`
 
-A Lambda Event Function function has one fixed CPU architecture. The CDK stack therefore creates two optional image functions when deployed with `-c lambdaEventFunctionEnabled=true`. Their image tags are `lambda-amd64` and `lambda-arm64` in the existing agent ECR repository. Before enabling the context, publish each architecture from a native runner with:
+A Lambda Event Function has one fixed CPU architecture. The CDK stack therefore creates two optional image functions when deployed with `-c lambdaEventFunctionEnabled=true`. Their image tags are `lambda-amd64` and `lambda-arm64` in the existing agent ECR repository. Before enabling the context, publish each architecture from a native runner with:
 
 ```bash
 ./build-local.sh --lambda-event-function --push <AgentRepositoryUri> --platform linux/amd64
@@ -38,9 +38,9 @@ Lambda Event Function has different constraints from ECS and MicroVMs:
 
 - Lambda Event Function timeout is capped at 1,800 seconds. The provided functions use that maximum. The control plane caps the worker's inner `native-image` timeout at 29 minutes, reserving one minute for artifact and status publication. Builds whose honest budget exceeds 30 minutes must use Fargate or MicroVM.
 - Memory, CPU allocation, and `/tmp` storage are fixed function deployment settings. The Lambda Event Function worker is provisioned with 10,240 MiB memory and 10,240 MiB ephemeral storage. Per-build Fargate CPU and ephemeral-storage requests do not resize it.
-- Asynchronous event delivery is at-least-once. Each worker acquires an `If-None-Match: *` S3 claim before compiling and the Lambda event-invoke configuration disables retries, so duplicate deliveries cannot race to overwrite canonical artifacts or `status.json`. A claim whose worker is killed before reporting is deliberately treated as failed after the fixed deadline, rather than retried into the canonical prefix.
-- An AWS Lambda Event Function has no API to terminate one named in-flight asynchronous invocation. `cancel` and the reaper write a durable cancellation marker so queued workers exit before claiming work, then mark the build terminal. A worker already inside `native-image` can continue until it returns or reaches its 1,800-second timeout.
-- If a worker never writes status, the control plane marks its cell failed after the 1,800-second execution budget plus the 60-second event-delivery limit. It cannot remain RUNNING indefinitely.
+- Asynchronous event delivery is at-least-once. Each invocation receives a unique attempt ID and acquires a renewable, ETag-fenced S3 lease. Duplicate deliveries exit while that lease is live; one bounded retry can take over after a hard timeout. Artifacts stay under immutable `attempts/<attemptId>/output/` keys, and create-only `status.json` is the commit point selecting the winner.
+- An AWS Lambda Event Function has no API to terminate one named in-flight asynchronous invocation. `cancel` writes a durable marker. The running worker polls that marker and its lease, terminates the complete `native-image` process tree, and skips artifact/status publication when cancellation or lease loss is observed.
+- If neither the initial invocation nor its bounded retry writes status, the control plane writes the cancellation marker and fails the cell after a 100-minute deadline. That covers the 65-minute maximum event age, a final 30-minute invocation, and a five-minute reconciliation margin.
 
 These constraints are deliberately documented rather than hidden behind a Fargate-shaped resource API. The backend is useful for bounded, bursty builds that fit Lambda's deployment-fixed worker shape. It is not a transparent substitute for long-running or dynamically sized ECS tasks.
 

@@ -155,6 +155,8 @@ class BuildItemsTest {
         cell.setBackend("LAMBDA");
         cell.setLambdaFunctionArn("arn:aws:lambda:eu-west-1:000:function:worker-arm");
         cell.setLambdaRequestId("request-123");
+        cell.setLambdaAttemptId("attempt-1");
+        cell.setLambdaArtifactKeys(List.of("builds/one/attempts/attempt-1/output/app"));
         record.setCells(List.of(cell));
 
         BuildRecord roundTripped = BuildItems.fromItem(BuildItems.toItem(record, mapper), mapper);
@@ -162,8 +164,11 @@ class BuildItemsTest {
         assertThat(restored.getBackend()).isEqualTo("LAMBDA");
         assertThat(restored.getLambdaFunctionArn()).endsWith("worker-arm");
         assertThat(restored.getLambdaRequestId()).isEqualTo("request-123");
-        // Lambda Event Function invocations are intentionally absent from reaper task/MicroVM handle sets: Lambda Event Functions
-        // offers no per-invocation stop operation.
+        assertThat(restored.getLambdaAttemptId()).isEqualTo("attempt-1");
+        assertThat(restored.getLambdaArtifactKeys())
+                .containsExactly("builds/one/attempts/attempt-1/output/app");
+        // Event Function invocations are intentionally absent from reaper task/MicroVM handle sets:
+        // Lambda Event Functions offer no per-invocation stop operation.
         assertThat(BuildItems.toItem(record, mapper)).doesNotContainKeys(BuildItems.ATTR_TASK_ARNS,
                 BuildItems.ATTR_MICROVM_IDS);
     }

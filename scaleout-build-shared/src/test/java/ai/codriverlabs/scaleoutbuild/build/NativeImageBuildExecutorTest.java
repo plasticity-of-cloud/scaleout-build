@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -157,6 +158,55 @@ class NativeImageBuildExecutorTest {
 
         String capturedArgs = Files.readString(stagingRoot.resolve("captured-args.txt"));
         assertThat(capturedArgs).contains("--pgo=default.iprof");
+    }
+
+    @Test
+    void cooperativeCancellationTerminatesNativeImageAndItsChild(@TempDir Path mountRoot)
+            throws Exception {
+        Path script = mountRoot.resolve("fake-native-image-with-child.sh");
+        Files.writeString(script, """
+                #!/bin/sh
+                sleep 60 &
+                echo $! > child.pid
+                wait
+                """);
+        Files.setPosixFilePermissions(script, Set.of(PosixFilePermission.OWNER_READ,
+                PosixFilePermission.OWNER_WRITE, PosixFilePermission.OWNER_EXECUTE));
+        BuildEnvironment environment = BuildEnvironment.builder(mountRoot)
+                .nativeImageCommand(List.of(script.toString()))
+                .build();
+        String stagingRelativePath = "builds/cancel/x86_64";
+        Path stagingRoot = mountRoot.resolve(stagingRelativePath);
+        Files.createDirectories(stagingRoot);
+        Files.writeString(stagingRoot.resolve("native-image.args"), "-o\noutput/app\n");
+        AtomicBoolean cancel = new AtomicBoolean();
+        Thread requestCancellation = new Thread(() -> {
+            Path childPid = stagingRoot.resolve("child.pid");
+            while (!Files.exists(childPid)) {
+                try {
+                    Thread.sleep(10);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+            cancel.set(true);
+        });
+        requestCancellation.start();
+        NativeImageBuildExecutor executor = new NativeImageBuildExecutor(environment, cancel::get);
+        BuildCellRequest request = BuildCellRequest.builder()
+                .buildId("cancel")
+                .buildKind(BuildKind.NATIVE)
+                .architecture(Architecture.host().orElse(Architecture.X86_64))
+                .stagingRelativePath(stagingRelativePath)
+                .build();
+
+        assertThatThrownBy(() -> executor.execute(request, BuildLog.discarding()))
+                .isInstanceOf(BuildCancelledException.class)
+                .hasMessageContaining("cancelled");
+        requestCancellation.join(2000);
+        long childPid = Long.parseLong(Files.readString(stagingRoot.resolve("child.pid")).trim());
+        assertThat(ProcessHandle.of(childPid).map(ProcessHandle::isAlive).orElse(false)).isFalse();
     }
 
     @Test

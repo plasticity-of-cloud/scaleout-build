@@ -316,6 +316,7 @@ public final class MicroVmCellLauncher implements CellLauncher {
      * type's actual usage.
      */
     public record StatusReport(String buildId, String cell, String state, int exitCode,
-                                List<Map<String, Object>> artifacts, String completedAt) {
+                                List<Map<String, Object>> artifacts, String completedAt,
+                                String attemptId) {
     }
 }

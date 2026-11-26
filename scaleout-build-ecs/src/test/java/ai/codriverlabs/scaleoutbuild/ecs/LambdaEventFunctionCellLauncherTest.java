@@ -68,13 +68,17 @@ class LambdaEventFunctionCellLauncherTest {
         when(s3.getObjectAsBytes(any(java.util.function.Consumer.class))).thenReturn(
                 ResponseBytes.fromByteArray(GetObjectResponse.builder().build(), ("""
                 {"buildId":"example","cell":"NATIVE/ARM64","state":"SUCCEEDED","exitCode":0,
-                 "artifacts":[],"completedAt":"2026-11-21T00:00:00Z"}
+                 "artifacts":[{"path":"app","key":"builds/example/attempts/a1/output/app",
+                 "sha256":"abc","sizeBytes":123}],"completedAt":"2026-11-21T00:00:00Z",
+                 "attemptId":"a1"}
                 """).getBytes(StandardCharsets.UTF_8)));
 
         CellPollResult result = launcher.poll(new CellHandle.LambdaEventFunctionHandle(ARM_FUNCTION, null,
                 STAGING_PATH));
 
         assertThat(result.state()).isEqualTo(CellLaunchState.SUCCEEDED);
+        assertThat(result.attemptId()).isEqualTo("a1");
+        assertThat(result.artifactKeys()).containsExactly("builds/example/attempts/a1/output/app");
         verify(lambda, never()).invoke(any(InvokeRequest.class));
     }
 
